@@ -43,9 +43,6 @@ class PomodoroCog(commands.Cog):
                 "category": "pomodoro"
             })
             self.bot.save_history()
-            # 履歴を即座にDiscordへバックアップ
-            await self.bot.upload_data_to_channel()
-
         text_channel = self.bot.get_channel(text_channel_id) or await self.bot.fetch_channel(text_channel_id)
         if not text_channel:
             return
@@ -91,9 +88,6 @@ class PomodoroCog(commands.Cog):
                 args=[interaction.guild.id, interaction.channel.id, interaction.user.voice.channel.id, job_id, volume, work_mins, rest_mins, True, 0],
                 id=job_id
             )
-
-            # 予約状態を確実にストレージに同期
-            await self.bot.upload_data_to_channel()
 
             embed = discord.Embed(
                 title="🍅 ポモドーロ・タイマー開始",

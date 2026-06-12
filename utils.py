@@ -23,7 +23,9 @@ async def alarm_id_autocomplete(interaction: discord.Interaction, current: str):
         user_id_str = f"_{interaction.user.id}_"
         choices = []
         for job in jobs:
-            if user_id_str in job.id and current.lower() in job.id.lower():
+            # ユーザーのジョブであり、かつ内部管理用(pre_, snooze_)ではないものだけを表示
+            is_internal = job.id.startswith(('pre_', 'snooze_'))
+            if user_id_str in job.id and not is_internal and current.lower() in job.id.lower():
                 if not job.next_run_time: continue # 実行予定がないものはスキップ
                 time_str = job.next_run_time.astimezone(JST).strftime('%H:%M')
                 icon = '🍅' if 'pomo' in job.id else '🔁'

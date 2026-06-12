@@ -3,14 +3,13 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 import shutil
-import random # randomはalarm_cogで使うので残す
 import json # JSONファイル読み書き用
 
 import discord
 from discord.ext import commands
 from discord import app_commands
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.events import EVENT_JOB_REMOVED, EVENT_JOB_EXECUTED
+from apscheduler.events import EVENT_JOB_REMOVED, EVENT_JOB_EXECUTED, EVENT_JOB_ADDED
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from dotenv import load_dotenv
 
@@ -47,6 +46,7 @@ class AlarmBot(commands.Bot):
         self.db_file = os.path.join(base_dir, "jobs.sqlite") # データベースのパス
         self.history = self.load_history() # 履歴を読み込む
         self.storage_channel = None
+        self._sync_wait_task = None # 同期待機用のタスク保持
 
     async def setup_hook(self):
         # ストレージチャンネルの確保
@@ -55,17 +55,20 @@ class AlarmBot(commands.Bot):
         # 最新データのダウンロード
         await self.download_data_from_channel()
 
-        # スケジューラーの変更（削除や実行完了）を検知して自動で同期するリスナー
+        # スケジューラーの変更を検知して自動で同期するリスナー
         def on_job_change(event):
             if self.loop and self.loop.is_running():
-                # ジョブが削除された、または実行が終了した（一度きりの場合）
-                # 少し待ってから同期（連続的な変更に対応するため）
                 async def delayed_sync():
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(5) # 5秒待って、その間の他の変更もまとめる
                     await self.upload_data_to_channel()
-                self.loop.create_task(delayed_sync())
+                
+                # すでに待機中の同期タスクがあればキャンセルして新しく作り直す（デバウンス処理）
+                if self._sync_wait_task and not self._sync_wait_task.done():
+                    self._sync_wait_task.cancel()
+                self._sync_wait_task = self.loop.create_task(delayed_sync())
 
-        self.scheduler.add_listener(on_job_change, EVENT_JOB_REMOVED | EVENT_JOB_EXECUTED)
+        # ジョブの追加、削除、実行完了をすべて監視して、自動でバックアップをとる
+        self.scheduler.add_listener(on_job_change, EVENT_JOB_REMOVED | EVENT_JOB_EXECUTED | EVENT_JOB_ADDED)
 
         # ボット起動時にスケジューラーを開始
         self.scheduler.start()
@@ -166,23 +169,30 @@ class AlarmBot(commands.Bot):
             if files:
                 # シンプルでシステム的な表示
                 embed = discord.Embed(
-                    description=f"💾 **Cloud State Updated** | ジョブ数: `{len(self.scheduler.get_jobs())}` | `{datetime.now(JST).strftime('%H:%M:%S')}`",
+                    description=(
+                        f"💾 **System State Synced**\n"
+                        f"実効予約数: "
+                        f"`{len([j for j in self.scheduler.get_jobs() if not j.id.startswith(('pre_', 'snooze_'))])}` "
+                        f" | 更新時刻: `{datetime.now(JST).strftime('%H:%M:%S')}`"
+                    ),
                     color=discord.Color.dark_grey()
                 )
                 new_msg = await target_channel.send(embed=embed, files=files)
-                logger.info(f"Data uploaded to storage. Current jobs: {len(self.scheduler.get_jobs())}")
+                logger.info("Data uploaded to storage channel successfully.")
                 
-                # 過去のバックアップを徹底的に削除（musukeさんの仰る「削除」を確実にする）
                 async def cleanup():
                     try:
-                        # 100件まで遡り、自分（ボット）が送った古いファイルをすべて消す
+                        # 最新のメッセージ以外を掃除（ストレージを清潔に保つ）
                         await target_channel.purge(
-                            limit=100,
+                            limit=20,
                             check=lambda m: m.author == self.user and m.id != new_msg.id,
                             before=new_msg
                         )
-                    except: pass
-                self.loop.create_task(cleanup())
+                    except Exception as e:
+                        logger.warning(f"Storage cleanup had a minor issue: {e}")
+                
+                # 掃除はバックグラウンドで実行
+                self.loop.create_task(cleanup()) 
         except Exception as e:
             logger.error(f"Failed to upload data: {e}")
 
@@ -217,6 +227,8 @@ class AlarmBot(commands.Bot):
         try:
             with open(self.history_file, 'w', encoding='utf-8') as f:
                 json.dump(self.history, f, ensure_ascii=False, indent=4)
+            # 履歴保存時も同期をリクエスト
+            self.loop.create_task(self.upload_data_to_channel())
         except Exception as e:
             logger.error(f"Error in save_history: {e}")
 

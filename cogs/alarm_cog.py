@@ -288,9 +288,6 @@ class AlarmCog(commands.Cog):
             if self.bot.scheduler.get_job(pre_job_id):
                 self.bot.scheduler.remove_job(pre_job_id)
 
-            # storageチャンネルの古いデータを確実に上書き・削除する
-            await self.bot.upload_data_to_channel()
-
             await interaction.response.send_message(f"🗑️ アラーム `{job_id}` をキャンセルしました。", ephemeral=True)
         else:
             await interaction.response.send_message(f"⚠️ 指定された ID `{job_id}` が見つかりませんでした。", ephemeral=True) # 修正なし、元々ephemeral
