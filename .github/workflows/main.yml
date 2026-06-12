@@ -11,6 +11,10 @@ on:
 
 jobs:
   run-bot:
+    concurrency:
+      group: discord-bot-runner
+      cancel-in-progress: true
+
     permissions:
       actions: write # ワークフローを再起動するために必要
 
