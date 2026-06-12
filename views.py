@@ -4,7 +4,7 @@ from utils import JST
 
 class AlarmView(discord.ui.View):
     """アラーム鳴動時に表示されるインタラクティブなボタン"""
-    def __init__(self, bot, guild_id: int, voice_channel_id: int, text_channel_id: int, volume: float, time_str: str):
+    def __init__(self, bot, guild_id: int, voice_channel_id: int, text_channel_id: int, volume: float, time_str: str, job_id: str):
         super().__init__(timeout=300) # 5分間でタイムアウト
         self.bot = bot
         self.guild_id = guild_id
@@ -12,6 +12,7 @@ class AlarmView(discord.ui.View):
         self.text_channel_id = text_channel_id
         self.volume = volume
         self.time_str = time_str
+        self.job_id = job_id
 
     async def disable_buttons(self, interaction: discord.Interaction):
         """ボタンを無効化してメッセージを更新"""
@@ -22,18 +23,18 @@ class AlarmView(discord.ui.View):
     @discord.ui.button(label="停止 (Stop)", style=discord.ButtonStyle.danger)
     async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.disable_buttons(interaction)
-        guild = self.bot.get_guild(self.guild_id)
-        if guild and guild.voice_client:
-            await guild.voice_client.disconnect()
+        alarm_cog = self.bot.get_cog('AlarmCog')
+        if alarm_cog:
+            await alarm_cog.stop_playback(self.job_id)
         await interaction.response.send_message("✅ アラームを停止しました。", ephemeral=True)
         self.stop()
 
     @discord.ui.button(label="スヌーズ (5分)", style=discord.ButtonStyle.primary)
     async def snooze_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.disable_buttons(interaction)
-        guild = self.bot.get_guild(self.guild_id)
-        if guild and guild.voice_client:
-            await guild.voice_client.disconnect()
+        alarm_cog = self.bot.get_cog('AlarmCog')
+        if alarm_cog:
+            await alarm_cog.stop_playback(self.job_id) # スヌーズ前に現在の再生を停止
 
         # JSTを指定して現在の時刻を取得
         run_time = datetime.now(JST) + timedelta(minutes=5)
@@ -50,6 +51,13 @@ class AlarmView(discord.ui.View):
         )
         await interaction.response.send_message(f"💤 スヌーズ設定完了: {run_time.strftime('%H:%M')} に再度通知します。", ephemeral=True)
         self.stop()
+    
+    async def on_timeout(self):
+        """Viewがタイムアウトした場合、ボットを切断する"""
+        alarm_cog = self.bot.get_cog('AlarmCog')
+        if alarm_cog:
+            await alarm_cog.stop_playback(self.job_id)
+        # タイムアウト時はinteraction.response.send_messageは使えない
 
 class PomodoroView(discord.ui.View):
     """ポモドーロセッション終了時に次のセッションを確認するボタン"""

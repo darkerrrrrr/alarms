@@ -32,18 +32,6 @@ class PomodoroCog(commands.Cog):
 
         if was_work:
             cycle_count += 1
-            # 進捗を履歴(JSON)に保存
-            now = datetime.now(JST)
-            user_id = int(job_id.split('_')[2])
-            self.bot.history.append({
-                "user_id": user_id,
-                "time": f"{cycle_count}回目完了",
-                "days": "ポモドーロ作業",
-                "set_at": now.isoformat(),
-                "category": "pomodoro"
-            })
-            self.bot.save_history()
-
         text_channel = self.bot.get_channel(text_channel_id) or await self.bot.fetch_channel(text_channel_id)
         if not text_channel:
             return

@@ -34,6 +34,7 @@ async def task_pre_notify(*args, **kwargs):
 class AlarmCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.active_alarm_playbacks = {} # {job_id: {'vc': VoiceClient, 'stop_event': asyncio.Event, 'audio_source': str, 'volume': float}}
 
     async def pre_notify(self, text_channel_id: int, job_id: str, time_str: str):
         """アラームの5分前に通知するタスク"""
@@ -73,38 +74,57 @@ class AlarmCog(commands.Cog):
             if guild.voice_client:
                 await guild.voice_client.disconnect()
 
+            # 停止イベントを作成し、アクティブな再生リストに追加
+            stop_event = asyncio.Event()
+            self.active_alarm_playbacks[job_id] = {
+                'vc': None, # 後で設定
+                'stop_event': stop_event,
+                'audio_source': None, # 後で設定
+                'volume': volume
+            }
+
             # 接続
             vc = await voice_channel.connect()
             logger.info(f"Connected to {voice_channel.name} for Job: {job_id}")
+            self.active_alarm_playbacks[job_id]['vc'] = vc
 
             # soundsフォルダからランダムにファイルを選択
             files = [f for f in os.listdir(AUDIO_DIR) if f.endswith(('.mp3', '.wav', '.ogg'))]
             if not files:
                 if text_channel:
                     await text_channel.send(f"⚠️ `{AUDIO_DIR}` フォルダに音声ファイルが見つかりません。")
-                await vc.disconnect()
+                await self.stop_playback(job_id) # 音源がないので停止
                 return
             
             selected_sound = random.choice(files)
             audio_source = os.path.join(AUDIO_DIR, selected_sound)
+            self.active_alarm_playbacks[job_id]['audio_source'] = audio_source
 
-            # 再生終了後のクリーンアップ処理
-            def after_playing(error):
+            # 再生終了後の処理 (ループまたは切断)
+            def play_next_segment(error):
                 if error:
-                    logger.error(f"Playback error: {error}")
+                    logger.error(f"Playback error for {job_id}: {error}")
                 
-                coro = vc.disconnect()
-                future = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
-                try:
-                    future.result()
-                except Exception as e:
-                    logger.error(f"Error during disconnect: {e}")
+                # 停止イベントがセットされていない、かつボイスクライアントが接続中の場合、ループ再生
+                if job_id in self.active_alarm_playbacks and not self.active_alarm_playbacks[job_id]['stop_event'].is_set():
+                    # 音声を再キュー
+                    ffmpeg_audio_loop = discord.FFmpegPCMAudio(audio_source)
+                    volume_audio_loop = discord.PCMVolumeTransformer(ffmpeg_audio_loop)
+                    volume_audio_loop.volume = volume
+                    vc.play(volume_audio_loop, after=play_next_segment)
+                else:
+                    # 停止が要求された、またはアラームがアクティブでなくなった場合、切断
+                    if vc.is_connected():
+                        coro = vc.disconnect()
+                        asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
+                    if job_id in self.active_alarm_playbacks:
+                        del self.active_alarm_playbacks[job_id]
 
             # 音声再生
             ffmpeg_audio = discord.FFmpegPCMAudio(audio_source)
             volume_audio = discord.PCMVolumeTransformer(ffmpeg_audio)
             volume_audio.volume = volume
-            vc.play(volume_audio, after=after_playing)
+            vc.play(volume_audio, after=play_next_segment)
             # ポモドーロなどの他機能での呼び出し時は、そちらでメッセージを出すため、アラーム/スヌーズ時のみ表示
             if text_channel and (job_id.startswith("alarm_") or job_id.startswith("snooze_")):
                 embed = discord.Embed(
@@ -112,22 +132,39 @@ class AlarmCog(commands.Cog):
                     description=f"予定の時間になりました。通話の区切りなどに活用してください。\n\n停止するかスヌーズを選択してください。",
                     color=discord.Color.gold()
                 )
-                view = AlarmView(self.bot, guild_id, voice_channel_id, text_channel_id, volume, time_str)
+                view = AlarmView(self.bot, guild_id, voice_channel_id, text_channel_id, volume, time_str, job_id)
                 await text_channel.send(embed=embed, view=view)
 
         except Exception as e:
             logger.exception(f"Failed to execute alarm: {e}")
             if guild.voice_client:
                 await guild.voice_client.disconnect()
+            if job_id in self.active_alarm_playbacks:
+                del self.active_alarm_playbacks[job_id]
+
+    async def stop_playback(self, job_id: str):
+        """指定されたジョブIDのアラーム再生を停止する"""
+        if job_id in self.active_alarm_playbacks:
+            playback_info = self.active_alarm_playbacks[job_id]
+            playback_info['stop_event'].set() # 停止イベントをセット
+            vc = playback_info['vc']
+            if vc and vc.is_playing():
+                vc.stop() # 現在の再生を停止し、after_playingをトリガー
+            elif vc and vc.is_connected():
+                # 再生中でないが接続中の場合、直接切断
+                await vc.disconnect()
+            del self.active_alarm_playbacks[job_id]
+            logger.info(f"Stopped playback for job: {job_id}")
 
     @app_commands.command(name="alarm", description="アラームをセットします（曜日の指定）")
     @app_commands.describe(
         time_str="時刻を入力してください (例: 07:30)",
-        day_of_week="鳴らしたい曜日を入力してください (例: 月水金)",
+        repeat="繰り返しにするかどうかを選択してください",
+        day_of_week="【繰り返し時のみ】鳴らしたい曜日を入力してください (例: 月水金)",
         volume="音量を指定してください (0.1〜1.0)"
     )
     @app_commands.autocomplete(day_of_week=day_of_week_autocomplete)
-    async def set_alarm(self, interaction: discord.Interaction, time_str: str, day_of_week: str, volume: float = 0.5):
+    async def set_alarm(self, interaction: discord.Interaction, time_str: str, repeat: bool = True, day_of_week: str = "毎日", volume: float = 0.5):
         if not interaction.user.voice:
             return await interaction.response.send_message("❌ ボイスチャンネルに入った状態で実行してください。", ephemeral=True)
 
@@ -136,46 +173,73 @@ class AlarmCog(commands.Cog):
 
         try:
             now = datetime.now(JST)
-            target_time = datetime.strptime(time_str, "%H:%M").replace(
-                year=now.year, month=now.month, day=now.day, second=0, microsecond=0, tzinfo=JST
-            )
+            time_obj = datetime.strptime(time_str, "%H:%M")
             cron_days = parse_days_to_cron(day_of_week)
-            job_id = f"alarm_{interaction.user.id}_{cron_days}_{target_time.strftime('%H%M%S')}"
-            pre_time = target_time - timedelta(minutes=5)
-            pre_job_id = f"pre_{job_id}"
+            
+            if repeat:
+                # 繰り返し設定 (cron)
+                target_time = time_obj.replace(
+                    year=now.year, month=now.month, day=now.day, second=0, microsecond=0, tzinfo=JST
+                )
+                job_id = f"alarm_{interaction.user.id}_{cron_days}_{target_time.strftime('%H%M%S')}"
+                pre_time = target_time - timedelta(minutes=5)
+                pre_job_id = f"pre_{job_id}"
 
+                self.bot.scheduler.add_job(
+                    task_execute_alarm, 'cron', day_of_week=cron_days, hour=target_time.hour, minute=target_time.minute,
+                    args=[interaction.guild.id, interaction.channel.id, interaction.user.voice.channel.id, job_id, volume, time_str],
+                    id=job_id
+                )
+                self.bot.scheduler.add_job(
+                    task_pre_notify, 'cron', day_of_week=cron_days, hour=pre_time.hour, minute=pre_time.minute,
+                    args=[interaction.channel.id, job_id, time_str],
+                    id=pre_job_id
+                )
+                mode_text = f"指定した曜日（{day_of_week}）に繰り返します"
+            else:
+                # 一度きり設定 (date) - 指定された曜日のうち最も近い日を探す
+                target_time = now.replace(hour=time_obj.hour, minute=time_obj.minute, second=0, microsecond=0)
+                if target_time <= now:
+                    target_time += timedelta(days=1)
+                
+                # 指定された曜日にヒットするまで日を進める
+                day_map = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+                target_weekdays = [day_map[d] for d in cron_days.split(",")] if cron_days != "*" else list(range(7))
+                
+                while target_time.weekday() not in target_weekdays:
+                    target_time += timedelta(days=1)
+                
+                job_id = f"once_{interaction.user.id}_{target_time.strftime('%m%d%H%M%S')}"
+                pre_time = target_time - timedelta(minutes=5)
+                pre_job_id = f"pre_{job_id}"
+
+                self.bot.scheduler.add_job(
+                    task_execute_alarm, 'date', run_date=target_time,
+                    args=[interaction.guild.id, interaction.channel.id, interaction.user.voice.channel.id, job_id, volume, time_str],
+                    id=job_id
+                )
+                # 5分前通知が未来の場合のみ予約
+                if pre_time > now:
+                    self.bot.scheduler.add_job(
+                        task_pre_notify, 'date', run_date=pre_time,
+                        args=[interaction.channel.id, job_id, time_str],
+                        id=pre_job_id
+                    )
+                mode_text = "一度のみ実行します"
+
+            # 既存の同名ジョブがあれば上書き（削除してから追加）
+            pre_job_id = f"pre_{job_id}"
             if self.bot.scheduler.get_job(job_id):
                 self.bot.scheduler.remove_job(job_id)
             if self.bot.scheduler.get_job(pre_job_id):
                 self.bot.scheduler.remove_job(pre_job_id)
 
-            self.bot.scheduler.add_job(
-                task_execute_alarm, 'cron', day_of_week=cron_days, hour=target_time.hour, minute=target_time.minute,
-                args=[interaction.guild.id, interaction.channel.id, interaction.user.voice.channel.id, job_id, volume, time_str],
-                id=job_id
-            )
-
-            self.bot.scheduler.add_job(
-                task_pre_notify, 'cron', day_of_week=cron_days, hour=pre_time.hour, minute=pre_time.minute,
-                args=[interaction.channel.id, job_id, time_str],
-                id=pre_job_id
-            )
-
-            embed = discord.Embed(title="✅ アラーム予約完了", description=f"指定した曜日（{day_of_week}）に繰り返します", color=discord.Color.green())
+            embed = discord.Embed(title="✅ アラーム予約完了", description=mode_text, color=discord.Color.green())
             embed.add_field(name="⏰ 設定時刻", value=f"`{target_time.strftime('%H:%M')}`", inline=True)
-            embed.add_field(name="🔁 曜日", value=f"`{day_of_week}`", inline=True)
+            if repeat:
+                embed.add_field(name="🔁 曜日", value=f"`{day_of_week}`", inline=True)
             embed.add_field(name="🔊 音量", value=f"`{volume}`", inline=True)
             embed.add_field(name="🆔 ジョブID", value=f"`{job_id}`", inline=False)
-
-            # 履歴をJSONとして保存
-            self.bot.history.append({
-                "user_id": interaction.user.id,
-                "time": time_str,
-                "days": day_of_week,
-                "set_at": now.isoformat(),
-                "category": "alarm"
-            })
-            self.bot.save_history()
 
             await interaction.response.send_message(embed=embed)
         except ValueError:
@@ -192,11 +256,21 @@ class AlarmCog(commands.Cog):
 
         embed = discord.Embed(title="⏰ あなたのアラーム一覧", color=discord.Color.blue(), timestamp=datetime.now(JST))
         for i, job in enumerate(user_jobs, 1):
-            # ジョブIDから曜日情報を取得 (alarm_user_days_time)
+            is_once = job.id.startswith("once_")
             job_id_parts = job.id.split('_')
-            days_info = f" ({job_id_parts[2]})" if len(job_id_parts) >= 3 else ""
+            
+            if is_once:
+                type_label = "一度きり"
+                # 次回実行日から日付(月/日)を取得
+                date_str = job.next_run_time.astimezone(JST).strftime('%m/%d')
+                info = f"({date_str})"
+            else:
+                type_label = "繰り返し"
+                info = f"({job_id_parts[2]})" if len(job_id_parts) >= 3 else ""
+            
+            time_str = job.next_run_time.astimezone(JST).strftime('%H:%M')
             embed.add_field(
-                name=f"{i}. 繰り返しアラーム{days_info}: {job.next_run_time.astimezone(JST).strftime('%H:%M')}",
+                name=f"{i}. {type_label}アラーム {info}: {time_str}",
                 value=f"ID: `{job.id}`",
                 inline=False
             )
@@ -215,48 +289,13 @@ class AlarmCog(commands.Cog):
             await interaction.response.send_message(f"🗑️ アラーム `{job_id}` をキャンセルしました。", ephemeral=True)
         else:
             await interaction.response.send_message(f"⚠️ 指定された ID `{job_id}` が見つかりませんでした。", ephemeral=True) # 修正なし、元々ephemeral
-    @app_commands.command(name="history", description="過去にセットしたアラームの履歴（最新10件）を表示します")
-    @app_commands.describe(query="検索したい時間や曜日を入力してください (任意)")
-    async def alarm_history(self, interaction: discord.Interaction, query: str = None):
-        user_history = [h for h in self.bot.history if h["user_id"] == interaction.user.id]
-        
-        if query: # クエリがある場合はフィルタリング
-            query_lower = query.lower()
-            user_history = [
-                h for h in user_history 
-                if query_lower in h.get("time", "").lower() or query_lower in h.get("days", "").lower()
-            ]
 
-        if not user_history:
-            return await interaction.response.send_message("過去の設定履歴は見つかりませんでした。", ephemeral=True) # 修正なし、元々ephemeral
-
-        embed = discord.Embed(title="📜 アラーム設定履歴", color=discord.Color.light_grey(), timestamp=datetime.now(JST))
-        # 最新の10件を新しい順で表示
-        for h in reversed(user_history[-10:]):
-            set_at_dt = datetime.fromisoformat(h['set_at'])
-            icon = "🍅" if h.get("category") == "pomodoro" else "⏰"
-            embed.add_field(
-                name=f"{icon} {h['time']} ({h['days']})",
-                value=f"記録日時: {set_at_dt.strftime('%m/%d %H:%M')}",
-                inline=False
-            )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="clear_history", description="自分のアラーム設定履歴をすべて削除します")
-    async def clear_history(self, interaction: discord.Interaction):
-        """ユーザー自身の履歴をデータベースから削除"""
-        try:
-            # ユーザーの履歴のみをフィルタリングして削除
-            self.bot.history = [h for h in self.bot.history if h["user_id"] != interaction.user.id]
-            self.bot.save_history()
-            await interaction.response.send_message("✅ あなたの履歴をすべて削除しました。", ephemeral=True) # 修正なし、元々ephemeral
-        except Exception as e:
-            logger.error(f"Failed to clear history: {e}")
-            await interaction.response.send_message("⚠️ 履歴の削除に失敗しました。", ephemeral=True) # 修正なし、元々ephemeral
     @app_commands.command(name="stop", description="再生中のアラームを強制停止して退室させます")
     async def stop_alarm(self, interaction: discord.Interaction):
         if interaction.guild.voice_client:
-            await interaction.guild.voice_client.disconnect() # 修正なし
+            # 現在再生中のアラームがあれば、そのjob_idを特定して停止する
+            # ただし、/stop コマンドからはどのjob_idか特定できないため、単純に切断する
+            await interaction.guild.voice_client.disconnect()
             await interaction.response.send_message("⏹️ アラームを停止して退室しました。", ephemeral=True)
         else:
             await interaction.response.send_message("❌ 現在ボイスチャンネルには接続していません。", ephemeral=True) # 修正なし、元々ephemeral

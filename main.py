@@ -42,9 +42,7 @@ class AlarmBot(commands.Bot):
         }
         # タイムゾーンをJSTに指定して、時間のズレを防止
         self.scheduler = AsyncIOScheduler(jobstores=jobstores, timezone=JST)
-        self.history_file = os.path.join(base_dir, "history.json") # history.jsonのパス
         self.db_file = os.path.join(base_dir, "jobs.sqlite") # データベースのパス
-        self.history = self.load_history() # 履歴を読み込む
         self.storage_channel = None
 
     async def setup_hook(self):
@@ -70,18 +68,8 @@ class AlarmBot(commands.Bot):
         logger.info("Scheduler started.")
         logger.info("Slash commands synced.")
 
-    def load_history(self):
-        """履歴をJSONファイルから読み込む"""
-        if os.path.exists(self.history_file):
-            with open(self.history_file, 'r', encoding='utf-8') as f:
-                try:
-                    return json.load(f)
-                except json.JSONDecodeError: # ファイルが空や不正な形式の場合
-                    return []
-        return []
-
     async def ensure_storage_channel(self):
-        """ストレージ用チャンネルを確認・作成し、Reika（オーナー）に権限を付与する"""
+        """ストレージ用チャンネルを確認・作成し、ボットのオーナーに権限を付与する"""
         guild = None
         if GUILD_ID and GUILD_ID.isdigit():
             try:
@@ -116,7 +104,7 @@ class AlarmBot(commands.Bot):
         channel = discord.utils.get(all_channels, name=channel_name)
 
         if not channel:
-            # ボットのオーナーを取得（Reikaさん）
+            # ボットのオーナーを取得
             app_info = await self.application_info()
             owner = app_info.owner
 
@@ -147,8 +135,6 @@ class AlarmBot(commands.Bot):
             files = []
             if os.path.exists(self.db_file):
                 files.append(discord.File(self.db_file))
-            if os.path.exists(self.history_file):
-                files.append(discord.File(self.history_file))
             
             if files:
                 # シンプルでシステム的な表示
@@ -188,26 +174,12 @@ class AlarmBot(commands.Bot):
             async for message in target_channel.history(limit=100):
                 if message.author == self.user and message.attachments:
                     for attachment in message.attachments:
-                        if attachment.filename in ["jobs.sqlite", "history.json"]:
-                            save_path = self.db_file if attachment.filename == "jobs.sqlite" else self.history_file
-                            await attachment.save(save_path)
+                        if attachment.filename == "jobs.sqlite":
+                            await attachment.save(self.db_file)
                             logger.info(f"Downloaded {attachment.filename} from Discord.")
-                    # history.jsonをメモリに再読み込み
-                    self.history = self.load_history()
                     break
         except Exception as e:
             logger.error(f"Failed to download data: {e}")
-
-    def save_history(self):
-        """履歴を保存し、Discordへのアップロードタスクを作成する"""
-        try:
-            with open(self.history_file, 'w', encoding='utf-8') as f:
-                json.dump(self.history, f, ensure_ascii=False, indent=4)
-            
-            if self.loop and self.loop.is_running():
-                self.loop.create_task(self.upload_data_to_channel())
-        except Exception as e:
-            logger.error(f"Error in save_history: {e}")
 
     async def close(self):
         """シャットダウン前にデータをアップロードする"""
@@ -246,7 +218,7 @@ class AlarmBot(commands.Bot):
         logger.info(f"Logged in as {self.user.name} (ID: {self.user.id})")
         
         # JSON履歴ファイルの初期化は不要（存在しない場合は空リストで開始）
-        
+        # TODO: daveyの存在チェックをここに入れる
         # 音声フォルダーの作成
         if not os.path.exists(AUDIO_DIR):
             os.makedirs(AUDIO_DIR)
