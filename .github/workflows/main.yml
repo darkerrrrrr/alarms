@@ -56,7 +56,7 @@ jobs:
         timeout 21300s python main.py || echo "Bot session ended to prevent GitHub timeout."
 
     - name: Trigger next relay run
-      if: always() # エラーが起きてもタイムアウトしても、次の起動を試みる
+      if: success() # 手動キャンセルや致命的なエラー時はリレーせず、正常終了（タイムアウト含む）時のみバトンを繋ぐ
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
