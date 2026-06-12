@@ -55,9 +55,19 @@ class AlarmBot(commands.Bot):
 
         # ボット起動時にスケジューラーを開始
         self.scheduler.start()
-        # Cogの読み込み (ファイル名から拡張子を除いたもの)
-        await self.load_extension('alarm_cog')
-        await self.load_extension('pomodoro_cog')
+
+        # Cogの自動読み込み (cogsフォルダ、またはルートから探す)
+        for ext in ['alarm_cog', 'pomodoro_cog']:
+            try:
+                await self.load_extension(f'cogs.{ext}')
+                logger.info(f"Loaded extension: cogs.{ext}")
+            except (commands.ExtensionNotFound, ImportError):
+                try:
+                    await self.load_extension(ext)
+                    logger.info(f"Loaded extension: {ext}")
+                except Exception as e:
+                    logger.error(f"Failed to load extension {ext}: {e}")
+
         # スラッシュコマンドをDiscord側に同期
         await self.tree.sync()
         logger.info("Scheduler started.")
@@ -131,11 +141,12 @@ class AlarmBot(commands.Bot):
                 files.append(discord.File(self.history_file))
             
             if files:
-                # 新しいバックアップを送信
-                new_msg = await target_channel.send(
-                    content=f"📦 Data Backup: {datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S')}", 
-                    files=files
+                # 邪魔にならない、よりシンプルでシステム的な表示に変更
+                embed = discord.Embed(
+                    description=f"💾 **System Data Synced** | `{datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S')}`",
+                    color=discord.Color.dark_grey()
                 )
+                new_msg = await target_channel.send(embed=embed, files=files)
                 logger.info("Data uploaded to storage channel.")
                 
                 # 古いバックアップメッセージを自動的に掃除（最新の1件だけ残す）
