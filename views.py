@@ -39,11 +39,12 @@ class AlarmView(discord.ui.View):
         run_time = datetime.now(JST) + timedelta(minutes=5)
         new_time_str = run_time.strftime('%H:%M')
         job_id = f"snooze_{interaction.user.id}_{run_time.strftime('%H%M%S')}"
-        cog = self.bot.get_cog('AlarmCog')
+        # alarm_cog モジュールから直接タスク関数をインポートするか、文字列パスで指定
+        from cogs.alarm_cog import task_execute_alarm
         
         # ボットのスケジューラーにタスクを追加
         self.bot.scheduler.add_job(
-            cog.execute_alarm, 'date', run_date=run_time,
+            task_execute_alarm, 'date', run_date=run_time,
             args=[self.guild_id, self.text_channel_id, self.voice_channel_id, job_id, self.volume, new_time_str],
             id=job_id
         )
@@ -86,8 +87,9 @@ class PomodoroView(discord.ui.View):
         mode = "work" if is_next_work else "rest"
         job_id = f"pomo_{mode}_{interaction.user.id}_{end_time.strftime('%H%M%S')}"
         
+        from cogs.pomodoro_cog import task_execute_pomodoro
         self.bot.scheduler.add_job(
-            pomo_cog.execute_pomodoro, 'date', run_date=end_time,
+            task_execute_pomodoro, 'date', run_date=end_time,
             args=[self.guild_id, self.text_channel_id, self.voice_channel_id, job_id, self.volume, self.work_mins, self.rest_mins, is_next_work, self.cycle_count], # cycle_countを引き継ぐ
             id=job_id
         )

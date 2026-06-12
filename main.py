@@ -56,17 +56,13 @@ class AlarmBot(commands.Bot):
         # ボット起動時にスケジューラーを開始
         self.scheduler.start()
 
-        # Cogの自動読み込み (cogsフォルダ、またはルートから探す)
+        # 名前空間を cogs. に固定して PicklingError を防ぐ
         for ext in ['alarm_cog', 'pomodoro_cog']:
             try:
                 await self.load_extension(f'cogs.{ext}')
                 logger.info(f"Loaded extension: cogs.{ext}")
-            except (commands.ExtensionNotFound, ImportError):
-                try:
-                    await self.load_extension(ext)
-                    logger.info(f"Loaded extension: {ext}")
-                except Exception as e:
-                    logger.error(f"Failed to load extension {ext}: {e}")
+            except Exception as e:
+                logger.error(f"Failed to load extension cogs.{ext}: {e}")
 
         # スラッシュコマンドをDiscord側に同期
         await self.tree.sync()
@@ -103,7 +99,20 @@ class AlarmBot(commands.Bot):
             return
 
         channel_name = "storage"
-        channel = discord.utils.get(guild.text_channels, name=channel_name)
+        
+        # 1. すでに設定済みのIDがあれば、そのチャンネルが実在するか確認する
+        if STORAGE_CHANNEL_ID and STORAGE_CHANNEL_ID.isdigit():
+            try:
+                channel = self.get_channel(int(STORAGE_CHANNEL_ID)) or await self.fetch_channel(int(STORAGE_CHANNEL_ID))
+                if channel:
+                    self.storage_channel = channel
+                    return
+            except:
+                pass
+
+        # 2. 名前で探す（キャッシュだけでなく、APIから最新のリストを取得して重複作成を防ぐ）
+        all_channels = await guild.fetch_channels()
+        channel = discord.utils.get(all_channels, name=channel_name)
 
         if not channel:
             # ボットのオーナーを取得（Reikaさん）

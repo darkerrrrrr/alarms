@@ -11,6 +11,14 @@ from views import PomodoroView
 
 logger = logging.getLogger(__name__)
 
+_bot = None
+
+async def task_execute_pomodoro(*args, **kwargs):
+    """ポモドーロ実行用のグローバルハンドラー"""
+    cog = _bot.get_cog('PomodoroCog')
+    if cog:
+        await cog.execute_pomodoro(*args, **kwargs)
+
 class PomodoroCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -77,7 +85,7 @@ class PomodoroCog(commands.Cog):
 
             # 作業終了時のタスクを登録
             self.bot.scheduler.add_job(
-                self.execute_pomodoro, 'date', run_date=work_end,
+                task_execute_pomodoro, 'date', run_date=work_end,
                 args=[interaction.guild.id, interaction.channel.id, interaction.user.voice.channel.id, job_id, volume, work_mins, rest_mins, True, 0],
                 id=job_id
             )
@@ -154,4 +162,6 @@ class PomodoroCog(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
 async def setup(bot: commands.Bot):
+    global _bot
+    _bot = bot
     await bot.add_cog(PomodoroCog(bot))

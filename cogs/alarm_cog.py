@@ -15,6 +15,22 @@ from views import AlarmView
 # from utils import JST # utilsからインポート済み
 logger = logging.getLogger(__name__)
 
+# ボットの参照を保持するグローバル変数（タスク用）
+_bot = None
+
+async def task_execute_alarm(*args, **kwargs):
+    """APSchedulerから呼び出されるグローバルなタスクハンドラー"""
+    cog = _bot.get_cog('AlarmCog')
+    if cog:
+        await cog.execute_alarm(*args, **kwargs)
+
+async def task_pre_notify(*args, **kwargs):
+    """APSchedulerから呼び出される5分前通知ハンドラー"""
+    cog = _bot.get_cog('AlarmCog')
+    if cog:
+        await cog.pre_notify(*args, **kwargs)
+
+
 class AlarmCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -132,13 +148,13 @@ class AlarmCog(commands.Cog):
                 self.bot.scheduler.remove_job(pre_job_id)
 
             self.bot.scheduler.add_job(
-                self.execute_alarm, 'cron', day_of_week=cron_days, hour=target_time.hour, minute=target_time.minute,
+                task_execute_alarm, 'cron', day_of_week=cron_days, hour=target_time.hour, minute=target_time.minute,
                 args=[interaction.guild.id, interaction.channel.id, interaction.user.voice.channel.id, job_id, volume, time_str],
                 id=job_id
             )
 
             self.bot.scheduler.add_job(
-                self.pre_notify, 'cron', day_of_week=cron_days, hour=pre_time.hour, minute=pre_time.minute,
+                task_pre_notify, 'cron', day_of_week=cron_days, hour=pre_time.hour, minute=pre_time.minute,
                 args=[interaction.channel.id, job_id, time_str],
                 id=pre_job_id
             )
@@ -244,4 +260,6 @@ class AlarmCog(commands.Cog):
             await interaction.response.send_message("❌ 現在ボイスチャンネルには接続していません。", ephemeral=True)
 
 async def setup(bot: commands.Bot):
+    global _bot
+    _bot = bot
     await bot.add_cog(AlarmCog(bot))
