@@ -32,6 +32,18 @@ class PomodoroCog(commands.Cog):
 
         if was_work:
             cycle_count += 1
+            # 進捗を履歴(JSON)に保存
+            now = datetime.now(JST)
+            user_id = int(job_id.split('_')[2])
+            self.bot.history.append({
+                "user_id": user_id,
+                "time": f"{cycle_count}回目完了",
+                "days": "ポモドーロ作業",
+                "set_at": now.isoformat(),
+                "category": "pomodoro"
+            })
+            self.bot.save_history()
+
         text_channel = self.bot.get_channel(text_channel_id) or await self.bot.fetch_channel(text_channel_id)
         if not text_channel:
             return
@@ -93,26 +105,6 @@ class PomodoroCog(commands.Cog):
             logger.exception(f"Pomodoro start failed: {e}")
             await interaction.response.send_message("⚠️ タイマーの開始に失敗しました。", ephemeral=True)
 
-    @app_commands.command(name="pomo_stats", description="今日のポモドーロ達成状況を確認します")
-    async def pomo_stats(self, interaction: discord.Interaction):
-        """今日の作業完了回数を集計して表示"""
-        user_id = interaction.user.id
-        today_start = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        count = 0
-        for h in self.bot.history:
-            if h.get("user_id") == user_id and h.get("category") == "pomodoro":
-                set_at_dt = datetime.fromisoformat(h["set_at"])
-                if set_at_dt >= today_start:
-                    count += 1
-
-        embed = discord.Embed(
-            title="📊 今日の作業レポート",
-            description=f"{interaction.user.display_name} さん、お疲れ様です！",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="🍅 完了したポモドーロ", value=f"**{count} 回**", inline=True)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot: commands.Bot):
     global _bot
