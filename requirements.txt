@@ -2,4 +2,5 @@ discord.py
 apscheduler
 python-dotenv
 PyNaCl
+davey
 SQLAlchemy
