@@ -10,6 +10,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.events import EVENT_JOB_REMOVED, EVENT_JOB_EXECUTED
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from dotenv import load_dotenv
 
@@ -53,6 +54,18 @@ class AlarmBot(commands.Bot):
 
         # 最新データのダウンロード
         await self.download_data_from_channel()
+
+        # スケジューラーの変更（削除や実行完了）を検知して自動で同期するリスナー
+        def on_job_change(event):
+            if self.loop and self.loop.is_running():
+                # ジョブが削除された、または実行が終了した（一度きりの場合）
+                # 少し待ってから同期（連続的な変更に対応するため）
+                async def delayed_sync():
+                    await asyncio.sleep(2)
+                    await self.upload_data_to_channel()
+                self.loop.create_task(delayed_sync())
+
+        self.scheduler.add_listener(on_job_change, EVENT_JOB_REMOVED | EVENT_JOB_EXECUTED)
 
         # ボット起動時にスケジューラーを開始
         self.scheduler.start()
@@ -153,17 +166,18 @@ class AlarmBot(commands.Bot):
             if files:
                 # シンプルでシステム的な表示
                 embed = discord.Embed(
-                    description=f"💾 **System Data Synced** | `{datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S')}`",
+                    description=f"💾 **Cloud State Updated** | ジョブ数: `{len(self.scheduler.get_jobs())}` | `{datetime.now(JST).strftime('%H:%M:%S')}`",
                     color=discord.Color.dark_grey()
                 )
                 new_msg = await target_channel.send(embed=embed, files=files)
-                logger.info("Data uploaded to storage channel.")
+                logger.info(f"Data uploaded to storage. Current jobs: {len(self.scheduler.get_jobs())}")
                 
-                # 掃除処理（一括削除）は時間がかかるため、awaitせずバックグラウンドで実行
+                # 過去のバックアップを徹底的に削除（musukeさんの仰る「削除」を確実にする）
                 async def cleanup():
                     try:
+                        # 100件まで遡り、自分（ボット）が送った古いファイルをすべて消す
                         await target_channel.purge(
-                            limit=10, # 100件も遡る必要はない（頻繁に更新されるため）
+                            limit=100,
                             check=lambda m: m.author == self.user and m.id != new_msg.id,
                             before=new_msg
                         )
@@ -199,13 +213,10 @@ class AlarmBot(commands.Bot):
             logger.error(f"Failed to download data: {e}")
 
     def save_history(self):
-        """履歴を保存し、Discordへのアップロードタスクを作成する"""
+        """履歴をJSONファイルに保存する"""
         try:
             with open(self.history_file, 'w', encoding='utf-8') as f:
                 json.dump(self.history, f, ensure_ascii=False, indent=4)
-            
-            if self.loop and self.loop.is_running():
-                self.loop.create_task(self.upload_data_to_channel())
         except Exception as e:
             logger.error(f"Error in save_history: {e}")
 
@@ -234,19 +245,31 @@ class AlarmBot(commands.Bot):
         cleaned_count = 0
         now = datetime.now(timezone.utc)
         for job in self.scheduler.get_jobs():
-            # 次の実行予定がない、または実行予定が過去の「1回限り」のジョブを削除
-            if job.next_run_time is None or job.next_run_time < now:
-                # 繰り返し（cron）ではないジョブ（snoozeやpomoの一時ジョブ）が対象
-                if not hasattr(job.trigger, 'cron'): 
+            try:
+                # cronトリガー（繰り返し）は掃除の対象外
+                if hasattr(job.trigger, 'fields'):
+                    continue
+                # 次の実行予定がない、または過去である「一度きり」のジョブを削除
+                if job.next_run_time is None or job.next_run_time < now:
                     self.scheduler.remove_job(job.id)
                     cleaned_count += 1
+            except:
+                continue
+
         if cleaned_count > 0:
             logger.info(f"Cleaned up {cleaned_count} stale jobs from database.")
+            # 掃除した結果をストレージに同期
+            await self.upload_data_to_channel()
 
         logger.info(f"Logged in as {self.user.name} (ID: {self.user.id})")
         
-        # JSON履歴ファイルの初期化は不要（存在しない場合は空リストで開始）
-        # TODO: daveyの存在チェックをここに入れる
+        # daveyの存在チェック
+        try:
+            import davey
+            logger.info("Voice library 'davey' is correctly installed.")
+        except ImportError:
+            logger.error("CRITICAL: 'davey' library not found. Voice playback will fail!")
+
         # 音声フォルダーの作成
         if not os.path.exists(AUDIO_DIR):
             os.makedirs(AUDIO_DIR)
@@ -255,8 +278,6 @@ class AlarmBot(commands.Bot):
         # ffmpegの存在確認
         if not shutil.which("ffmpeg"):
             logger.error("FFmpeg was not found in the system PATH. Audio playback will fail.")
-
-        await self.change_presence(activity=discord.Game(name="/alarm でセット"))
 
 bot = AlarmBot()
 if __name__ == "__main__":

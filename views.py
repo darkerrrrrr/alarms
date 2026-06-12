@@ -26,6 +26,9 @@ class AlarmView(discord.ui.View):
         alarm_cog = self.bot.get_cog('AlarmCog')
         if alarm_cog:
             await alarm_cog.stop_playback(self.job_id)
+        
+        # 同期は main.py のリスナーが自動で行うが、念のため即時反映を促す
+        await self.bot.upload_data_to_channel()
         await interaction.response.send_message("✅ アラームを停止しました。", ephemeral=True)
         self.stop()
 
@@ -39,19 +42,19 @@ class AlarmView(discord.ui.View):
         # JSTを指定して現在の時刻を取得
         run_time = datetime.now(JST) + timedelta(minutes=5)
         new_time_str = run_time.strftime('%H:%M')
-        job_id = f"snooze_{interaction.user.id}_{run_time.strftime('%H%M%S')}"
+        snooze_job_id = f"snooze_{interaction.user.id}_{run_time.strftime('%H%M%S')}"
         # alarm_cog モジュールから直接タスク関数をインポートするか、文字列パスで指定
         from cogs.alarm_cog import task_execute_alarm
         
         # ボットのスケジューラーにタスクを追加
         self.bot.scheduler.add_job(
             task_execute_alarm, 'date', run_date=run_time,
-            args=[self.guild_id, self.text_channel_id, self.voice_channel_id, job_id, self.volume, new_time_str],
-            id=job_id
+            args=[self.guild_id, self.text_channel_id, self.voice_channel_id, snooze_job_id, self.volume, new_time_str],
+            id=snooze_job_id
         )
 
-        # 状態をストレージに同期
-        self.bot.loop.create_task(self.bot.upload_data_to_channel())
+        # スヌーズ予約を即座にストレージへ保存
+        await self.bot.upload_data_to_channel()
 
         await interaction.response.send_message(f"💤 スヌーズ設定完了: {run_time.strftime('%H:%M')} に再度通知します。", ephemeral=True)
         self.stop()
@@ -107,7 +110,7 @@ class PomodoroView(discord.ui.View):
         )
 
         # 状態をストレージに同期
-        self.bot.loop.create_task(self.bot.upload_data_to_channel())
+        await self.bot.upload_data_to_channel()
         
         title = "✍️ 作業開始" if is_next_work else "☕ 休憩開始"
         await interaction.response.send_message(f"✅ {title}しました。終了予定: `{end_time.strftime('%H:%M:%S')}`", ephemeral=True)

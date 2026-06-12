@@ -62,6 +62,11 @@ class AlarmCog(commands.Cog):
             logger.error(f"Voice Channel ID {voice_channel_id} not found.")
             return
 
+        # 接続前に、ボイスチャンネルに人間がいるか確認（誰もいなければ鳴らさない）
+        if not any(not member.bot for member in voice_channel.members):
+            logger.info(f"Skipping alarm {job_id}: No human users in {voice_channel.name}.")
+            return
+
         # 権限の確認
         permissions = voice_channel.permissions_for(guild.me)
         if not permissions.connect or not permissions.speak:
@@ -126,7 +131,8 @@ class AlarmCog(commands.Cog):
             volume_audio.volume = volume
             vc.play(volume_audio, after=play_next_segment)
             # ポモドーロなどの他機能での呼び出し時は、そちらでメッセージを出すため、アラーム/スヌーズ時のみ表示
-            if text_channel and (job_id.startswith("alarm_") or job_id.startswith("snooze_")):
+            # once_ (一度きり) の場合もボタンを表示するように修正
+            if text_channel and (job_id.startswith("alarm_") or job_id.startswith("snooze_") or job_id.startswith("once_")):
                 embed = discord.Embed(
                     title=f"🔔 {time_str} です！",
                     description=f"予定の時間になりました。通話の区切りなどに活用してください。\n\n停止するかスヌーズを選択してください。",
@@ -176,7 +182,14 @@ class AlarmCog(commands.Cog):
             time_obj = datetime.strptime(time_str, "%H:%M")
             cron_days = parse_days_to_cron(day_of_week)
             
-            # ベースとなるターゲット時刻の作成
+            # 同時刻・同ユーザーの既存ジョブを徹底的に掃除
+            for existing_job in self.bot.scheduler.get_jobs():
+                if str(interaction.user.id) in existing_job.id and time_obj.strftime('%H%M') in existing_job.id and not existing_job.id.startswith("snooze_"):
+                    self.bot.scheduler.remove_job(existing_job.id)
+                    pre_id = f"pre_{existing_job.id}"
+                    if self.bot.scheduler.get_job(pre_id):
+                        self.bot.scheduler.remove_job(pre_id)
+
             target_time = now.replace(hour=time_obj.hour, minute=time_obj.minute, second=0, microsecond=0)
 
             if repeat:
@@ -224,7 +237,7 @@ class AlarmCog(commands.Cog):
             embed = discord.Embed(title="✅ アラーム予約完了", description=description, color=discord.Color.green())
             embed.add_field(name="⏰ 設定時刻", value=f"`{target_time.strftime('%H:%M')}`", inline=True)
             embed.add_field(name="🔁 繰り返し", value="はい" if repeat else "いいえ", inline=True)
-            embed.add_field(name="� 音量", value=f"`{volume}`", inline=True)
+            embed.add_field(name="🔊 音量", value=f"`{volume}`", inline=True)
             embed.add_field(name="🆔 ジョブID", value=f"`{job_id}`", inline=False)
 
             # 履歴をJSONとして保存
@@ -236,6 +249,8 @@ class AlarmCog(commands.Cog):
                 "category": "alarm"
             })
             self.bot.save_history()
+            # ストレージへの同期を確実に完了させる
+            await self.bot.upload_data_to_channel()
 
             await interaction.response.send_message(embed=embed)
         except ValueError:
@@ -272,6 +287,10 @@ class AlarmCog(commands.Cog):
             pre_job_id = f"pre_{job_id}"
             if self.bot.scheduler.get_job(pre_job_id):
                 self.bot.scheduler.remove_job(pre_job_id)
+
+            # storageチャンネルの古いデータを確実に上書き・削除する
+            await self.bot.upload_data_to_channel()
+
             await interaction.response.send_message(f"🗑️ アラーム `{job_id}` をキャンセルしました。", ephemeral=True)
         else:
             await interaction.response.send_message(f"⚠️ 指定された ID `{job_id}` が見つかりませんでした。", ephemeral=True) # 修正なし、元々ephemeral
