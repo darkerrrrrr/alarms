@@ -164,7 +164,8 @@ class AlarmBot(commands.Bot):
                 if message.author == self.user and message.attachments:
                     for attachment in message.attachments:
                         if attachment.filename in ["jobs.sqlite", "history.json"]:
-                            await attachment.save(os.path.join(os.path.dirname(__file__), attachment.filename))
+                            save_path = self.db_file if attachment.filename == "jobs.sqlite" else self.history_file
+                            await attachment.save(save_path)
                             logger.info(f"Downloaded {attachment.filename} from Discord.")
                     # history.jsonをメモリに再読み込み
                     self.history = self.load_history()
@@ -222,6 +223,6 @@ class AlarmBot(commands.Bot):
 bot = AlarmBot()
 if __name__ == "__main__":
     if not TOKEN:
-        logger.error("DISCORD_TOKEN is missing in .env file.")
+        logger.error("DISCORD_TOKEN is missing. Please set it in GitHub Secrets or .env file.")
     else:
         bot.run(TOKEN)
