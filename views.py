@@ -49,6 +49,10 @@ class AlarmView(discord.ui.View):
             args=[self.guild_id, self.text_channel_id, self.voice_channel_id, job_id, self.volume, new_time_str],
             id=job_id
         )
+
+        # 状態をストレージに同期
+        self.bot.loop.create_task(self.bot.upload_data_to_channel())
+
         await interaction.response.send_message(f"💤 スヌーズ設定完了: {run_time.strftime('%H:%M')} に再度通知します。", ephemeral=True)
         self.stop()
     
@@ -101,6 +105,9 @@ class PomodoroView(discord.ui.View):
             args=[self.guild_id, self.text_channel_id, self.voice_channel_id, job_id, self.volume, self.work_mins, self.rest_mins, is_next_work, self.cycle_count], # cycle_countを引き継ぐ
             id=job_id
         )
+
+        # 状態をストレージに同期
+        self.bot.loop.create_task(self.bot.upload_data_to_channel())
         
         title = "✍️ 作業開始" if is_next_work else "☕ 休憩開始"
         await interaction.response.send_message(f"✅ {title}しました。終了予定: `{end_time.strftime('%H:%M:%S')}`", ephemeral=True)
