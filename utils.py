@@ -18,12 +18,18 @@ def parse_days_to_cron(day_str: str) -> str:
 
 async def alarm_id_autocomplete(interaction: discord.Interaction, current: str):
     """ジョブIDの入力補完"""
-    jobs = interaction.client.scheduler.get_jobs()
-    user_id_str = f"_{interaction.user.id}_"
-    return [
-        app_commands.Choice(name=f"{'🍅' if 'pomo' in job.id else '🔁'} {job.next_run_time.astimezone(JST).strftime('%H:%M')} (ID: {job.id})", value=job.id)
-        for job in jobs if user_id_str in job.id and current.lower() in job.id.lower()
-    ][:25]
+    try:
+        jobs = interaction.client.scheduler.get_jobs()
+        user_id_str = f"_{interaction.user.id}_"
+        choices = []
+        for job in jobs:
+            if user_id_str in job.id and current.lower() in job.id.lower():
+                time_str = job.next_run_time.astimezone(JST).strftime('%H:%M')
+                icon = '🍅' if 'pomo' in job.id else '🔁'
+                choices.append(app_commands.Choice(name=f"{icon} {time_str} (ID: {job.id})", value=job.id))
+        return choices[:25]
+    except:
+        return []
 
 async def day_of_week_autocomplete(interaction: discord.Interaction, current: str):
     """曜日の入力補完"""

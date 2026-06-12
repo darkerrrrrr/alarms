@@ -150,7 +150,7 @@ class AlarmBot(commands.Bot):
                 files.append(discord.File(self.history_file))
             
             if files:
-                # 邪魔にならない、よりシンプルでシステム的な表示に変更
+                # シンプルでシステム的な表示
                 embed = discord.Embed(
                     description=f"💾 **System Data Synced** | `{datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S')}`",
                     color=discord.Color.dark_grey()
@@ -158,12 +158,16 @@ class AlarmBot(commands.Bot):
                 new_msg = await target_channel.send(embed=embed, files=files)
                 logger.info("Data uploaded to storage channel.")
                 
-                # 古いバックアップメッセージを自動的に掃除（最新の1件だけ残す）
-                await target_channel.purge(
-                    limit=100, 
-                    check=lambda m: m.author == self.user and m.id != new_msg.id,
-                    before=new_msg
-                )
+                # 掃除処理（一括削除）は時間がかかるため、awaitせずバックグラウンドで実行
+                async def cleanup():
+                    try:
+                        await target_channel.purge(
+                            limit=10, # 100件も遡る必要はない（頻繁に更新されるため）
+                            check=lambda m: m.author == self.user and m.id != new_msg.id,
+                            before=new_msg
+                        )
+                    except: pass
+                self.loop.create_task(cleanup())
         except Exception as e:
             logger.error(f"Failed to upload data: {e}")
 
@@ -225,6 +229,19 @@ class AlarmBot(commands.Bot):
         await self.process_commands(message)
 
     async def on_ready(self):
+        # 起動時に「過去の遺物」を掃除する
+        cleaned_count = 0
+        now = datetime.now(timezone.utc)
+        for job in self.scheduler.get_jobs():
+            # 次の実行予定がない、または実行予定が過去の「1回限り」のジョブを削除
+            if job.next_run_time is None or job.next_run_time < now:
+                # 繰り返し（cron）ではないジョブ（snoozeやpomoの一時ジョブ）が対象
+                if not hasattr(job.trigger, 'cron'): 
+                    self.scheduler.remove_job(job.id)
+                    cleaned_count += 1
+        if cleaned_count > 0:
+            logger.info(f"Cleaned up {cleaned_count} stale jobs from database.")
+
         logger.info(f"Logged in as {self.user.name} (ID: {self.user.id})")
         
         # JSON履歴ファイルの初期化は不要（存在しない場合は空リストで開始）
