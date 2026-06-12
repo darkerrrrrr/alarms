@@ -11,6 +11,9 @@ on:
 
 jobs:
   run-bot:
+    permissions:
+      actions: write # ワークフローを再起動するために必要
+
     runs-on: ubuntu-latest
     timeout-minutes: 360 # GitHub Actionsの制限時間（6時間）
 
@@ -47,3 +50,10 @@ jobs:
       run: |
         # 5時間55分 (21300秒) 経過したら正常終了させて次のジョブへ繋ぐ
         timeout 21300s python main.py || echo "Bot session ended to prevent GitHub timeout."
+
+    - name: Trigger next relay run
+      if: always() # エラーが起きてもタイムアウトしても、次の起動を試みる
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh workflow run "Discord Bot Runner"
