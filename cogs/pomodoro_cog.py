@@ -100,45 +100,10 @@ class PomodoroCog(commands.Cog):
             embed.add_field(name="⏰ 作業終了予定", value=f"`{work_end.strftime('%H:%M:%S')}`", inline=False)
             embed.set_footer(text="途中で止める場合は /cancel を使用してください")
 
-            await interaction.response.send_message(embed=embed)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
             logger.exception(f"Pomodoro start failed: {e}")
             await interaction.response.send_message("⚠️ タイマーの開始に失敗しました。", ephemeral=True)
-
-    @app_commands.command(name="status", description="ポモドーロ・タイマーの残り時間を表示します")
-    async def status(self, interaction: discord.Interaction):
-        """現在実行中のポモドーロセッションの残り時間を表示"""
-        jobs = self.bot.scheduler.get_jobs()
-        user_id_str = str(interaction.user.id)
-        pomo_job = None
-
-        for job in jobs:
-            if job.id.startswith("pomo_") and user_id_str in job.id:
-                pomo_job = job
-                break
-
-        if not pomo_job:
-            return await interaction.response.send_message("❌ 現在実行中のポモドーロ・タイマーはありません。", ephemeral=True)
-
-        now = datetime.now(JST)
-        remaining = pomo_job.next_run_time.astimezone(JST) - now
-        seconds = max(int(remaining.total_seconds()), 0)
-        mins, secs = divmod(seconds, 60)
-
-        is_work = "work" in pomo_job.id
-        status_type = "✍️ 作業中" if is_work else "☕ 休憩中"
-        color = discord.Color.red() if is_work else discord.Color.blue()
-
-        embed = discord.Embed(
-            title=f"🍅 ポモドーロ・ステータス ({status_type})",
-            description=f"残り時間: **{mins}分{secs}秒**",
-            color=color,
-            timestamp=now
-        )
-        embed.add_field(name="⏰ 終了予定", value=f"`{pomo_job.next_run_time.astimezone(JST).strftime('%H:%M:%S')}`")
-        embed.set_footer(text=f"ID: {pomo_job.id}")
-
-        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="pomo_stats", description="今日のポモドーロ達成状況を確認します")
     async def pomo_stats(self, interaction: discord.Interaction):
@@ -159,7 +124,7 @@ class PomodoroCog(commands.Cog):
             color=discord.Color.green()
         )
         embed.add_field(name="🍅 完了したポモドーロ", value=f"**{count} 回**", inline=True)
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot: commands.Bot):
     global _bot

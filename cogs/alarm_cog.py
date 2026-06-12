@@ -48,8 +48,10 @@ class AlarmCog(commands.Cog):
 
     async def execute_alarm(self, guild_id: int, text_channel_id: int, voice_channel_id: int, job_id: str, volume: float, time_str: str):
         """指定された時刻にボイスチャンネルへ参加し、音声を再生して切断するタスク"""
+        logger.info(f"⏰ アラームタスク開始: {job_id} ({time_str})")
         guild = self.bot.get_guild(guild_id)
         if not guild:
+            logger.error(f"Guild ID {guild_id} not found.")
             return
 
         voice_channel = self.bot.get_channel(voice_channel_id) or await self.bot.fetch_channel(voice_channel_id)
@@ -186,7 +188,7 @@ class AlarmCog(commands.Cog):
         user_jobs = [j for j in jobs if user_id_str in j.id and not j.id.startswith("snooze_")] # スヌーズは除外
 
         if not user_jobs:
-            return await interaction.response.send_message("現在予約されているアラームはありません。", ephemeral=True)
+            return await interaction.response.send_message("現在予約されているアラームはありません。", ephemeral=True) # 修正なし、元々ephemeral
 
         embed = discord.Embed(title="⏰ あなたのアラーム一覧", color=discord.Color.blue(), timestamp=datetime.now(JST))
         for i, job in enumerate(user_jobs, 1):
@@ -198,21 +200,21 @@ class AlarmCog(commands.Cog):
                 value=f"ID: `{job.id}`",
                 inline=False
             )
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
     @app_commands.command(name="cancel", description="指定したIDのアラームをキャンセルします")
     @app_commands.autocomplete(job_id=alarm_id_autocomplete)
     async def cancel_alarm(self, interaction: discord.Interaction, job_id: str):
         if str(interaction.user.id) not in job_id:
-            return await interaction.response.send_message("❌ 自分のアラームIDのみキャンセルできます。", ephemeral=True)
+            return await interaction.response.send_message("❌ 自分のアラームIDのみキャンセルできます。", ephemeral=True) # 修正なし、元々ephemeral
 
         if self.bot.scheduler.get_job(job_id):
             self.bot.scheduler.remove_job(job_id)
             pre_job_id = f"pre_{job_id}"
             if self.bot.scheduler.get_job(pre_job_id):
                 self.bot.scheduler.remove_job(pre_job_id)
-            await interaction.response.send_message(f"🗑️ アラーム `{job_id}` をキャンセルしました。")
+            await interaction.response.send_message(f"🗑️ アラーム `{job_id}` をキャンセルしました。", ephemeral=True)
         else:
-            await interaction.response.send_message(f"⚠️ 指定された ID `{job_id}` が見つかりませんでした。", ephemeral=True)
+            await interaction.response.send_message(f"⚠️ 指定された ID `{job_id}` が見つかりませんでした。", ephemeral=True) # 修正なし、元々ephemeral
     @app_commands.command(name="history", description="過去にセットしたアラームの履歴（最新10件）を表示します")
     @app_commands.describe(query="検索したい時間や曜日を入力してください (任意)")
     async def alarm_history(self, interaction: discord.Interaction, query: str = None):
@@ -226,7 +228,7 @@ class AlarmCog(commands.Cog):
             ]
 
         if not user_history:
-            return await interaction.response.send_message("過去の設定履歴は見つかりませんでした。", ephemeral=True)
+            return await interaction.response.send_message("過去の設定履歴は見つかりませんでした。", ephemeral=True) # 修正なし、元々ephemeral
 
         embed = discord.Embed(title="📜 アラーム設定履歴", color=discord.Color.light_grey(), timestamp=datetime.now(JST))
         # 最新の10件を新しい順で表示
@@ -238,7 +240,7 @@ class AlarmCog(commands.Cog):
                 value=f"記録日時: {set_at_dt.strftime('%m/%d %H:%M')}",
                 inline=False
             )
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="clear_history", description="自分のアラーム設定履歴をすべて削除します")
     async def clear_history(self, interaction: discord.Interaction):
@@ -247,17 +249,17 @@ class AlarmCog(commands.Cog):
             # ユーザーの履歴のみをフィルタリングして削除
             self.bot.history = [h for h in self.bot.history if h["user_id"] != interaction.user.id]
             self.bot.save_history()
-            await interaction.response.send_message("✅ あなたの履歴をすべて削除しました。", ephemeral=True)
+            await interaction.response.send_message("✅ あなたの履歴をすべて削除しました。", ephemeral=True) # 修正なし、元々ephemeral
         except Exception as e:
             logger.error(f"Failed to clear history: {e}")
-            await interaction.response.send_message("⚠️ 履歴の削除に失敗しました。", ephemeral=True)
+            await interaction.response.send_message("⚠️ 履歴の削除に失敗しました。", ephemeral=True) # 修正なし、元々ephemeral
     @app_commands.command(name="stop", description="再生中のアラームを強制停止して退室させます")
     async def stop_alarm(self, interaction: discord.Interaction):
         if interaction.guild.voice_client:
-            await interaction.guild.voice_client.disconnect()
-            await interaction.response.send_message("⏹️ アラームを停止して退室しました。")
+            await interaction.guild.voice_client.disconnect() # 修正なし
+            await interaction.response.send_message("⏹️ アラームを停止して退室しました。", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ 現在ボイスチャンネルには接続していません。", ephemeral=True)
+            await interaction.response.send_message("❌ 現在ボイスチャンネルには接続していません。", ephemeral=True) # 修正なし、元々ephemeral
 
 async def setup(bot: commands.Bot):
     global _bot

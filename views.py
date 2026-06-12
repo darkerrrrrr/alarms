@@ -25,7 +25,7 @@ class AlarmView(discord.ui.View):
         guild = self.bot.get_guild(self.guild_id)
         if guild and guild.voice_client:
             await guild.voice_client.disconnect()
-        await interaction.response.send_message("✅ アラームを停止しました。")
+        await interaction.response.send_message("✅ アラームを停止しました。", ephemeral=True)
         self.stop()
 
     @discord.ui.button(label="スヌーズ (5分)", style=discord.ButtonStyle.primary)
@@ -48,7 +48,7 @@ class AlarmView(discord.ui.View):
             args=[self.guild_id, self.text_channel_id, self.voice_channel_id, job_id, self.volume, new_time_str],
             id=job_id
         )
-        await interaction.response.send_message(f"💤 スヌーズ設定完了: {run_time.strftime('%H:%M')} に再度通知します。")
+        await interaction.response.send_message(f"💤 スヌーズ設定完了: {run_time.strftime('%H:%M')} に再度通知します。", ephemeral=True)
         self.stop()
 
 class PomodoroView(discord.ui.View):
@@ -95,11 +95,11 @@ class PomodoroView(discord.ui.View):
         )
         
         title = "✍️ 作業開始" if is_next_work else "☕ 休憩開始"
-        await interaction.response.send_message(f"✅ {title}しました。終了予定: `{end_time.strftime('%H:%M:%S')}`")
+        await interaction.response.send_message(f"✅ {title}しました。終了予定: `{end_time.strftime('%H:%M:%S')}`", ephemeral=True)
         self.stop()
 
     @discord.ui.button(label="終了 (Stop)", style=discord.ButtonStyle.secondary)
     async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.disable_buttons(interaction)
-        await interaction.response.send_message("✅ ポモドーロタイマーを終了しました。")
+        await interaction.response.send_message("✅ ポモドーロタイマーを終了しました。", ephemeral=True)
         self.stop()

@@ -40,7 +40,8 @@ class AlarmBot(commands.Bot):
         jobstores = {
             'default': SQLAlchemyJobStore(url=f'sqlite:///{os.path.join(base_dir, "jobs.sqlite")}')
         }
-        self.scheduler = AsyncIOScheduler(jobstores=jobstores)
+        # タイムゾーンをJSTに指定して、時間のズレを防止
+        self.scheduler = AsyncIOScheduler(jobstores=jobstores, timezone=JST)
         self.history_file = os.path.join(base_dir, "history.json") # history.jsonのパス
         self.db_file = os.path.join(base_dir, "jobs.sqlite") # データベースのパス
         self.history = self.load_history() # 履歴を読み込む
