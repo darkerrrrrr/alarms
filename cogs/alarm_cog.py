@@ -87,7 +87,7 @@ class AlarmCog(commands.Cog):
 
     @app_commands.command(name="cancel", description="セットしたアラームを一覧から選択して解除します")
     @app_commands.autocomplete(alarm_selection=alarm_id_autocomplete)
-    async def cancel_alarm(self, interaction, alarm_selection):
+    async def cancel_alarm(self, interaction: discord.Interaction, alarm_selection: str):
         try:
             self.bot.scheduler.remove_job(alarm_selection)
             try: self.bot.scheduler.remove_job(f"pre_{alarm_selection}")
