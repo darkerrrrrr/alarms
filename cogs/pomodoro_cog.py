@@ -53,7 +53,7 @@ class PomodoroCog(commands.Cog):
 
         # 作業終了時と休憩終了時でViewを表示
         embed = discord.Embed(title=f"⏰ {status_msg}終了", description=f"{status_msg}セッションが終了しました。次は**{next_phase}**です。\n開始しますか？", color=discord.Color.gold())
-        view = PomodoroView(self.bot, guild_id, user_id, text_channel_id, volume, work_mins, rest_mins, was_work, cycle_count, memo)
+        view = PomodoroView(self.bot, guild_id, user_id, text_channel_id, volume, work_mins, rest_mins, was_work, cycle_count, memo, job_id)
         await text_channel.send(embed=embed, view=view)
 
     @app_commands.command(name="pomodoro", description="作業と休憩のサイクル（ポモドーロ・タイマー）を開始します")
@@ -64,6 +64,8 @@ class PomodoroCog(commands.Cog):
         memo="タイマーの内容（例: 勉強、仕事など）"
     )
     async def pomodoro(self, interaction: discord.Interaction, work_mins: int = 25, rest_mins: int = 5, volume: float = 0.5, memo: str = None):
+        await self.bot.grant_storage_access(interaction.user)
+
         if not interaction.user.voice:
             return await interaction.response.send_message("❌ ボイスチャンネルに入った状態で実行してください。", ephemeral=True)
 

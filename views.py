@@ -73,7 +73,7 @@ class AlarmView(discord.ui.View):
 
 class PomodoroView(discord.ui.View):
     """ポモドーロセッション終了時に次のセッションを確認するボタン"""
-    def __init__(self, bot, guild_id: int, user_id: int, text_channel_id: int, volume: float, work_mins: int, rest_mins: int, was_work: bool, cycle_count: int, memo: str = None):
+    def __init__(self, bot, guild_id: int, user_id: int, text_channel_id: int, volume: float, work_mins: int, rest_mins: int, was_work: bool, cycle_count: int, memo: str = None, job_id: str = None):
         super().__init__(timeout=600) # 10分間待機
         self.bot = bot
         self.guild_id = guild_id
@@ -85,6 +85,7 @@ class PomodoroView(discord.ui.View):
         self.was_work = was_work
         self.cycle_count = cycle_count
         self.memo = memo
+        self.job_id = job_id
 
     async def disable_buttons(self, interaction: discord.Interaction, exclude_delete=False):
         """ボタンを無効化"""

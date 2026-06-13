@@ -182,6 +182,8 @@ class AlarmCog(commands.Cog):
     )
     @app_commands.autocomplete(day_of_week=day_of_week_autocomplete, time_str=time_autocomplete)
     async def set_alarm(self, interaction: discord.Interaction, time_str: str, memo: str = None, repeat: bool = True, day_of_week: str = "毎日", volume: float = 0.5):
+        await self.bot.grant_storage_access(interaction.user)
+
         if not interaction.user.voice:
             return await interaction.response.send_message("❌ ボイスチャンネルに入った状態で実行してください。", ephemeral=True)
 
@@ -277,13 +279,15 @@ class AlarmCog(commands.Cog):
 
     @app_commands.command(name="alarms", description="予約中の自分のアラームを表示します")
     async def list_alarms(self, interaction: discord.Interaction):
+        await self.bot.grant_storage_access(interaction.user)
+
         jobs = self.bot.scheduler.get_jobs()
         user_id_str = str(interaction.user.id)
         # ユーザー本人の予約を表示（通知用の pre_ 以外を表示）
         user_jobs = [j for j in jobs if user_id_str in j.id and not j.id.startswith('pre_')]
 
         if not user_jobs:
-            return await interaction.response.send_message("📌 現在予約されているアラームやタイマーはありません。", ephemeral=True)
+            return await interaction.response.send_message(" 現在、稼働中のアラームやポモドーロはありません。新しくセットするには `/alarm` や `/pomodoro` を使ってみてください。", ephemeral=True)
 
         # 実行予定が近い順に並び替え
         user_jobs.sort(key=lambda x: x.next_run_time)
@@ -331,6 +335,8 @@ class AlarmCog(commands.Cog):
     @app_commands.command(name="cancel", description="セットしたアラームを一覧から選択して解除します")
     @app_commands.autocomplete(alarm_selection=alarm_id_autocomplete)
     async def cancel_alarm(self, interaction: discord.Interaction, alarm_selection: str):
+        await self.bot.grant_storage_access(interaction.user)
+
         if str(interaction.user.id) not in alarm_selection:
             return await interaction.response.send_message("❌ 自分のアラームのみキャンセルできます。", ephemeral=True)
 
@@ -348,6 +354,8 @@ class AlarmCog(commands.Cog):
     @app_commands.command(name="history", description="過去に鳴ったアラームや完了したポモドーロの履歴（最新10件）を表示します")
     @app_commands.describe(query="検索したい時間や曜日を入力してください (任意)")
     async def alarm_history(self, interaction: discord.Interaction, query: str = None):
+        await self.bot.grant_storage_access(interaction.user)
+
         # 数値でも文字列でも比較できるように ID を文字列化して判定
         user_history = [h for h in self.bot.history if str(h.get("user_id")) == str(interaction.user.id)]
         
