@@ -144,12 +144,12 @@ class AlarmCog(commands.Cog):
                 self.bot.save_history()
 
             # ポモドーロなどの他機能での呼び出し時は、そちらでメッセージを出すため、アラーム/スヌーズ時のみ表示
-            # once_ (一度きり) の場合もボタンを表示するように修正
-            if text_channel and (job_id.startswith("alarm_") or job_id.startswith("snooze_") or job_id.startswith("once_")):
+            # アラーム系（alarm, once, snooze）の場合は停止・スヌーズボタンを表示
+            if text_channel and any(job_id.startswith(p) for p in ["alarm_", "once_", "snooze_"]):
                 title = f"🔔 {time_str}「{memo}」" if memo else f"🔔 {time_str} です！"
                 embed = discord.Embed(
                     title=title,
-                    description=f"予定の時間になりました。通話の区切りなどに活用してください。\n\n停止するかスヌーズを選択してください。",
+                    description=f"予定の時間になりました。\n\n停止するかスヌーズを選択してください。",
                     color=discord.Color.gold()
                 )
                 view = AlarmView(self.bot, guild_id, user_id, text_channel_id, volume, time_str, job_id, memo)
