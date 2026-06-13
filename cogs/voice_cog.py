@@ -42,7 +42,15 @@ class VoiceCog(commands.Cog):
     async def pre_notify(self, text_channel_id, job_id, time_str, memo=None):
         channel = self.bot.get_channel(text_channel_id) or await self.bot.fetch_channel(text_channel_id)
         if channel:
-            embed = discord.Embed(title=f"⏳ もうすぐ「{memo or '時間'}」です", description=f"**{time_str}** にアラームが鳴ります。", color=discord.Color.blue())
+            # スケジュールされたジョブから次の実行時刻を取得して動的タイムスタンプを生成
+            target_ts = ""
+            job = self.bot.scheduler.get_job(job_id)
+            if job and job.next_run_time:
+                ts = int(job.next_run_time.timestamp())
+                target_ts = f"\n予定時刻: <t:{ts}:t> (**<t:{ts}:R>**)"
+
+            display_memo = memo.replace("@time", time_str) if memo else "時間"
+            embed = discord.Embed(title=f"⏳ もうすぐ「{display_memo}」です", description=f"**{time_str}** にアラームが鳴ります。{target_ts}", color=discord.Color.blue())
             await channel.send(embed=embed, silent=True)
 
     async def execute_alarm(self, guild_id, text_channel_id, user_id, job_id, volume, time_str, memo=None, repeat_info="一度きり"):
@@ -67,23 +75,27 @@ class VoiceCog(commands.Cog):
 
             vc.play(discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(audio_path), volume=volume), after=play_loop)
 
+            display_memo = memo.replace("@time", time_str) if memo else memo
+
             if job_id.startswith(('alarm_', 'once_')) and self.bot.storage:
                 self.bot.storage.add_history(
                     user_id=user_id,
-                    time=f"{time_str} ({memo})" if memo else time_str,
+                    time=f"{time_str} ({display_memo})" if display_memo else time_str,
                     days=repeat_info,
                     category="alarm"
                 )
 
             if any(job_id.startswith(p) for p in ["alarm_", "once_", "snooze_"]):
                 channel = self.bot.get_channel(text_channel_id)
-                view = AlarmView(self.bot, guild_id, user_id, text_channel_id, volume, time_str, job_id, memo)
-                await channel.send(embed=discord.Embed(title=f"🔔 {time_str} です！", description=f"📝 {memo or 'なし'}", color=discord.Color.gold()), view=view, silent=True)
+                view = AlarmView(self.bot, guild_id, user_id, text_channel_id, volume, time_str, job_id, display_memo)
+                await channel.send(embed=discord.Embed(title=f"🔔 {time_str} です！", description=f"📝 {display_memo or 'なし'}", color=discord.Color.gold()), view=view, silent=True)
         except:
             if guild.voice_client: await guild.voice_client.disconnect()
 
     async def execute_pomodoro(self, guild_id, text_channel_id, user_id, job_id, volume, work_mins, rest_mins, was_work, cycle_count, memo=None):
-        await self.execute_alarm(guild_id, text_channel_id, user_id, job_id, volume, "ポモドーロ終了", memo, "ポモドーロ")
+        # 「ポモドーロ終了」という文字の代わりに、実際の現在時刻を渡して @time 置換を機能させる
+        current_time_str = datetime.now(JST).strftime('%H:%M')
+        await self.execute_alarm(guild_id, text_channel_id, user_id, job_id, volume, current_time_str, memo, "ポモドーロ")
         
         if was_work:
             cycle_count += 1

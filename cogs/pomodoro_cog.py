@@ -21,9 +21,14 @@ class PomodoroCog(commands.Cog):
                 if "pomo_" in j.id and str(interaction.user.id) in j.id:
                     self.bot.scheduler.remove_job(j.id)
 
+            # 開始メッセージでも @time を反映して、何分に終わるかハッキリさせる
+            display_memo = memo.replace("@time", work_end.strftime('%H:%M')) if memo else ""
+            memo_info = f"「**{display_memo}**」" if display_memo else ""
+
             # 作業終了時のタスクを登録
             self.bot.scheduler.add_job(task_execute_pomodoro, 'date', run_date=work_end, args=[interaction.guild.id, interaction.channel.id, interaction.user.id, job_id, volume, work_mins, rest_mins, True, 0, memo], id=job_id)
-            await interaction.response.send_message(f"🍅 開始: {work_mins}分集中 ({work_end.strftime('%H:%M')} 終了)", ephemeral=True)
+            ts = int(work_end.timestamp())
+            await interaction.response.send_message(f"🍅 {memo_info}開始: {work_mins}分集中\n終了予定: <t:{ts}:t> (**<t:{ts}:R>**)", ephemeral=True)
         except:
             await interaction.response.send_message("⚠️ エラー", ephemeral=True)
 

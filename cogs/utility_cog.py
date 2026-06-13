@@ -26,10 +26,11 @@ class UtilityCog(commands.Cog):
         embed = discord.Embed(title=f"📜 {interaction.user.display_name}さんの履歴", color=discord.Color.light_grey())
         for h in reversed(user_history[:10]):
             set_at = datetime.fromisoformat(h['set_at'])
+            ts = int(set_at.timestamp())
             icon = "🍅" if h.get("category") == "pomodoro" else "⏰"
             embed.add_field(
                 name=f"{icon} {h['time']} ({h['days']})",
-                value=f"記録日時: {set_at.strftime('%m/%d %H:%M')}",
+                value=f"記録日時: <t:{ts}:f> (**<t:{ts}:R>**)",
                 inline=False
             )
         await interaction.response.send_message(embed=embed, ephemeral=True)

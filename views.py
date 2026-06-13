@@ -61,7 +61,8 @@ class AlarmView(discord.ui.View):
         )
         
         # 通知メッセージ
-        await interaction.response.send_message(f"💤 スヌーズ: {new_time_str} に再度通知します。", ephemeral=True, silent=True)
+        ts = int(run_time.timestamp())
+        await interaction.response.send_message(f"💤 スヌーズ: <t:{ts}:t> (**<t:{ts}:R>**) に再度通知します。", ephemeral=True, silent=True)
         self.stop()
 
     @discord.ui.button(label="🗑️", style=discord.ButtonStyle.secondary)
@@ -145,7 +146,8 @@ class PomodoroView(discord.ui.View):
         )
 
         title = "✍️ 作業開始" if is_next_work else "☕ 休憩開始"
-        await interaction.response.send_message(f"✅ {title}しました。終了予定: `{end_time.strftime('%H:%M:%S')}`", ephemeral=True, silent=True)
+        ts = int(end_time.timestamp())
+        await interaction.response.send_message(f"✅ {title}しました。終了予定: <t:{ts}:t> (**<t:{ts}:R>**)", ephemeral=True, silent=True)
         self.stop()
 
     @discord.ui.button(label="終了 (Stop)", style=discord.ButtonStyle.secondary)
