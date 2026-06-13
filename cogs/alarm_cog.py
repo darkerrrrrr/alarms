@@ -253,8 +253,7 @@ class AlarmCog(commands.Cog):
             # カテゴリ分けして見やすく整理
             content_text = f"📝 **内容**: `{memo or 'なし'}`\n🔊 **音量**: `{int(volume * 100)}%`"
             embed.add_field(name="📋 アラーム詳細", value=content_text, inline=False)
-            
-            embed.add_field(name="🆔 管理ID", value=f"`{job_id}`", inline=False)
+            embed.set_footer(text=f"識別用コード: {job_id}")
 
             # 残り時間を計算して表示
             diff = target_time - now
@@ -322,27 +321,27 @@ class AlarmCog(commands.Cog):
             memo = (job.args[9] if len(job.args) > 9 else "作業中") if job.id.startswith("pomo_") else (job.args[6] if len(job.args) > 6 else "なし")
 
             embed.add_field(
-                name=f"{i}. {icon} {next_run.strftime('%H:%M')} ({mode}) ― {remaining}",
-                value=f"└ 📝 `{memo}` | 🔊 `{vol_display}` | 🆔 `{job.id}`",
+                name=f"#{i} {icon} {next_run.strftime('%H:%M')} ({mode})",
+                value=f"⏳ **{remaining}**\n└ 📝 `{memo}` | 🔊 `{vol_display}`",
                 inline=False
             )
 
         embed.set_footer(text="キャンセルは /cancel、過去の履歴は /history で確認できます")
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    @app_commands.command(name="cancel", description="指定したIDのアラームをキャンセルします")
-    @app_commands.autocomplete(job_id=alarm_id_autocomplete)
-    async def cancel_alarm(self, interaction: discord.Interaction, job_id: str):
-        if str(interaction.user.id) not in job_id:
-            return await interaction.response.send_message("❌ 自分のアラームIDのみキャンセルできます。", ephemeral=True) # 修正なし、元々ephemeral
+    @app_commands.command(name="cancel", description="セットしたアラームを一覧から選択して解除します")
+    @app_commands.autocomplete(alarm_selection=alarm_id_autocomplete)
+    async def cancel_alarm(self, interaction: discord.Interaction, alarm_selection: str):
+        if str(interaction.user.id) not in alarm_selection:
+            return await interaction.response.send_message("❌ 自分のアラームのみキャンセルできます。", ephemeral=True)
 
         try:
-            self.bot.scheduler.remove_job(job_id)
+            self.bot.scheduler.remove_job(alarm_selection)
             try:
-                self.bot.scheduler.remove_job(f"pre_{job_id}")
+                self.bot.scheduler.remove_job(f"pre_{alarm_selection}")
             except JobLookupError:
                 pass
             
-            await interaction.response.send_message(f"🗑️ アラーム `{job_id}` をキャンセルしました。", ephemeral=True)
+            await interaction.response.send_message(f"🗑️ 選択したアラームをキャンセルしました。", ephemeral=True)
         except JobLookupError:
             await interaction.response.send_message(f"⚠️ 指定されたアラームが見つかりませんでした。", ephemeral=True)
 
