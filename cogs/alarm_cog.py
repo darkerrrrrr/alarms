@@ -49,7 +49,7 @@ class AlarmCog(commands.Cog):
             )
             await text_channel.send(embed=embed)
 
-    async def execute_alarm(self, guild_id: int, text_channel_id: int, user_id: int, job_id: str, volume: float, time_str: str, memo: str = None):
+    async def execute_alarm(self, guild_id: int, text_channel_id: int, user_id: int, job_id: str, volume: float, time_str: str, memo: str = None, repeat_info: str = "一度きり"):
         """指定された時刻にボイスチャンネルへ参加し、音声を再生して切断するタスク"""
         logger.info(f"⏰ アラームタスク開始: {job_id} ({time_str})")
         guild = self.bot.get_guild(guild_id)
@@ -127,6 +127,18 @@ class AlarmCog(commands.Cog):
             volume_audio = discord.PCMVolumeTransformer(ffmpeg_audio)
             volume_audio.volume = volume
             vc.play(volume_audio, after=play_next_segment)
+
+            # 履歴をJSONとして保存 (アラーム本体の実行完了時のみ記録)
+            if job_id.startswith(('alarm_', 'once_')):
+                self.bot.history.append({
+                    "user_id": user_id,
+                    "time": f"{time_str} ({memo})" if memo else time_str,
+                    "days": repeat_info,
+                    "set_at": datetime.now(JST).isoformat(),
+                    "category": "alarm"
+                })
+                self.bot.save_history()
+
             # ポモドーロなどの他機能での呼び出し時は、そちらでメッセージを出すため、アラーム/スヌーズ時のみ表示
             # once_ (一度きり) の場合もボタンを表示するように修正
             if text_channel and (job_id.startswith("alarm_") or job_id.startswith("snooze_") or job_id.startswith("once_")):
@@ -196,7 +208,7 @@ class AlarmCog(commands.Cog):
                 job_id = f"alarm_{interaction.user.id}_{time_id}"
                 self.bot.scheduler.add_job(
                     task_execute_alarm, 'cron', day_of_week=cron_days, hour=target_time.hour, minute=target_time.minute,
-                    args=[interaction.guild.id, interaction.channel.id, interaction.user.id, job_id, volume, time_str, memo],
+                    args=[interaction.guild.id, interaction.channel.id, interaction.user.id, job_id, volume, time_str, memo, day_of_week],
                     id=job_id
                 )
                 # 5分前通知の登録
@@ -220,7 +232,7 @@ class AlarmCog(commands.Cog):
                 job_id = f"once_{interaction.user.id}_{time_id}"
                 self.bot.scheduler.add_job(
                     task_execute_alarm, 'date', run_date=target_time,
-                    args=[interaction.guild.id, interaction.channel.id, interaction.user.id, job_id, volume, time_str, memo],
+                    args=[interaction.guild.id, interaction.channel.id, interaction.user.id, job_id, volume, time_str, memo, "一度きり"],
                     id=job_id
                 )
                 # 5分前通知
@@ -231,31 +243,33 @@ class AlarmCog(commands.Cog):
                         args=[interaction.channel.id, job_id, time_str, memo],
                         id=f"pre_{job_id}"
                     )
-                description = f"{target_time.strftime('%m/%d')} に一度のみ実行します"
+                description = f"🗓️ **{target_time.strftime('%m/%d')}** に一度のみ実行します。"
 
-            embed = discord.Embed(title="✅ アラーム予約完了", description=description, color=discord.Color.green())
-            embed.add_field(name="⏰ 設定時刻", value=f"`{target_time.strftime('%H:%M')}`", inline=True)
-            embed.add_field(name="🔁 繰り返し", value=f"はい ({day_of_week})" if repeat else "いいえ", inline=True)
-            embed.add_field(name="🔊 音量", value=f"`{volume}`", inline=True)
-            if memo:
-                embed.add_field(name="📝 メモ", value=f"`{memo}`", inline=False)
-            embed.add_field(name="🆔 ジョブID", value=f"`{job_id}`", inline=False)
+            if repeat:
+                description = f"🗓️ **{day_of_week}** の **{target_time.strftime('%H:%M')}** に定期実行します。"
+
+            embed = discord.Embed(title="✅ アラームをセットしました", description=description, color=discord.Color.green())
+            
+            # カテゴリ分けして見やすく整理
+            content_text = f"📝 **内容**: `{memo or 'なし'}`\n🔊 **音量**: `{int(volume * 100)}%`"
+            embed.add_field(name="📋 アラーム詳細", value=content_text, inline=False)
+            
+            embed.add_field(name="🆔 管理ID", value=f"`{job_id}`", inline=False)
 
             # 残り時間を計算して表示
             diff = target_time - now
-            hours, remainder = divmod(int(diff.total_seconds()), 3600)
-            minutes, _ = divmod(remainder, 60)
-            embed.set_footer(text=f"次の実行まで: あと {hours}時間 {minutes}分")
-
-            # 履歴をJSONとして保存
-            self.bot.history.append({
-                "user_id": interaction.user.id,
-                "time": f"{time_str} ({memo})" if memo else time_str,
-                "days": day_of_week if repeat else "一度きり",
-                "set_at": now.isoformat(),
-                "category": "alarm"
-            })
-            self.bot.save_history()
+            seconds = int(diff.total_seconds())
+            h, r = divmod(max(0, seconds), 3600)
+            m, _ = divmod(r, 60)
+            
+            if h > 24:
+                remaining = f"あと {diff.days}日以上"
+            elif h > 0:
+                remaining = f"あと {h}時間 {m}分"
+            else:
+                remaining = f"あと {m}分"
+            
+            embed.set_footer(text=f"次の実行まで: {remaining}")
 
             # 設定完了メッセージを本人にのみ表示（プライバシー保護）
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -270,35 +284,50 @@ class AlarmCog(commands.Cog):
         user_jobs = [j for j in jobs if user_id_str in j.id and not j.id.startswith('pre_')]
 
         if not user_jobs:
-            return await interaction.response.send_message("現在予約されているアラームはありません。", ephemeral=True) # 修正なし、元々ephemeral
+            return await interaction.response.send_message("📌 現在予約されているアラームやタイマーはありません。", ephemeral=True)
 
-        embed = discord.Embed(title="⏰ 現在のアラーム一覧", color=discord.Color.blue(), timestamp=datetime.now(JST))
+        # 実行予定が近い順に並び替え
+        user_jobs.sort(key=lambda x: x.next_run_time)
+
+        embed = discord.Embed(title="⏰ 現在の予約スケジュール", color=discord.Color.blue())
+        embed.set_footer(text=f"合計 {len(user_jobs)} 件 | 現在時刻: {datetime.now(JST).strftime('%H:%M')}")
+
         for i, job in enumerate(user_jobs, 1):
             # 種別の判定
-            if job.id.startswith("once_"): mode = "一度きり"
-            elif job.id.startswith("snooze_"): mode = "💤 スヌーズ"
-            elif job.id.startswith("pomo_"): mode = "🍅 ポモドーロ"
-            else: mode = "🔁 繰り返し"
+            if job.id.startswith("once_"): icon, mode = "🔔", "一度"
+            elif job.id.startswith("snooze_"): icon, mode = "💤", "スヌーズ"
+            elif job.id.startswith("pomo_"): icon, mode = "🍅", "ポモ"
+            else: icon, mode = "🔁", "毎週"
 
             next_run = job.next_run_time.astimezone(JST)
-            time_str = next_run.strftime('%H:%M')
-            date_str = next_run.strftime('%m/%d')
             
-            # ジョブに設定されている音量を取得
-            vol = job.args[4] if len(job.args) > 4 else "???"
-            memo = job.args[6] if len(job.args) > 6 else None
-
-            # 残り時間の簡易表示
+            # 残り時間の計算ロジックをリファイン
             diff = next_run - datetime.now(JST)
-            h, r = divmod(int(diff.total_seconds()), 3600)
+            seconds = int(diff.total_seconds())
+            h, r = divmod(max(0, seconds), 3600)
             m, _ = divmod(r, 60)
-            time_info = f"{time_str} ({date_str}) | あと{h}h{m}m"
+            
+            if h > 24:
+                remaining = f"あと {diff.days}日以上"
+            elif h > 0:
+                remaining = f"あと {h}時間 {m}分"
+            else:
+                remaining = f"あと {m}分"
+
+            # ジョブ引数から音量とメモを取得
+            vol_val = job.args[4] if len(job.args) > 4 else 0.5
+            vol_display = f"{int(vol_val * 100)}%"
+            
+            # ポモドーロとアラームでメモの引数位置が異なるのを吸収
+            memo = (job.args[9] if len(job.args) > 9 else "作業中") if job.id.startswith("pomo_") else (job.args[6] if len(job.args) > 6 else "なし")
 
             embed.add_field(
-                name=f"{i}. {time_info} | 🔊 {vol}",
-                value=f"📝 {memo}\nID: `{job.id}`" if memo else f"ID: `{job.id}`",
+                name=f"{i}. {icon} {next_run.strftime('%H:%M')} ({mode}) ― {remaining}",
+                value=f"└ 📝 `{memo}` | 🔊 `{vol_display}` | 🆔 `{job.id}`",
                 inline=False
             )
+
+        embed.set_footer(text="キャンセルは /cancel、過去の履歴は /history で確認できます")
         await interaction.response.send_message(embed=embed, ephemeral=True)
     @app_commands.command(name="cancel", description="指定したIDのアラームをキャンセルします")
     @app_commands.autocomplete(job_id=alarm_id_autocomplete)
@@ -317,7 +346,7 @@ class AlarmCog(commands.Cog):
         except JobLookupError:
             await interaction.response.send_message(f"⚠️ 指定されたアラームが見つかりませんでした。", ephemeral=True)
 
-    @app_commands.command(name="history", description="過去にセットしたアラームの履歴（最新10件）を表示します")
+    @app_commands.command(name="history", description="過去に鳴ったアラームや完了したポモドーロの履歴（最新10件）を表示します")
     @app_commands.describe(query="検索したい時間や曜日を入力してください (任意)")
     async def alarm_history(self, interaction: discord.Interaction, query: str = None):
         # 数値でも文字列でも比較できるように ID を文字列化して判定
@@ -344,6 +373,12 @@ class AlarmCog(commands.Cog):
                 inline=False
             )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="now", description="ボットが認識している現在の時刻を確認します")
+    async def show_now(self, interaction: discord.Interaction):
+        """ボットの現在時刻（JST）を表示する"""
+        now = datetime.now(JST)
+        await interaction.response.send_message(f"🕙 現在のボットの時刻（JST）は `{now.strftime('%H:%M:%S')}` です。", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
