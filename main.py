@@ -3,7 +3,6 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 import shutil
-import json # JSONファイル読み書き用
 
 import discord
 from discord.ext import commands
@@ -36,77 +35,35 @@ class AlarmBot(commands.Bot):
         
         # 実行ファイルのディレクトリを取得してパスを動的に設定
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        # スケジューラーは後で初期化するため、ここではインスタンスのみ作成
         self.scheduler = AsyncIOScheduler(timezone=JST)
-        self.history_file = os.path.join(base_dir, "history.json") # history.jsonのパス
-        self.db_file = os.path.join(base_dir, "jobs.sqlite") # データベースのパス
+        self.history_file = os.path.join(base_dir, "history.json")
+        self.db_file = os.path.join(base_dir, "jobs.sqlite")
         self.base_dir = base_dir
-        self.history = self.load_history() # 履歴を読み込む
-        self.storage_channel = None
-        self._sync_wait_task = None # 同期待機用のタスク保持
 
     async def setup_hook(self):
-        # ストレージチャンネルの確保
-        await self.ensure_storage_channel()
+        # データの復元とエンジンの読み込み
+        await self.load_extension('cogs.storage_cog')
+        if self.storage:
+            await self.storage.ensure_storage_channel(GUILD_ID, STORAGE_CHANNEL_ID)
+            await self.storage.download_data_from_channel()
 
-        # 【重要】DB接続前に、まず最新データをDiscordからダウンロードする
-        await self.download_data_from_channel()
-
-        # グローバルなコマンドエラーハンドラーを設定
         self.tree.on_error = self.on_app_command_error
-
-        # ダウンロード完了後にDBストアを接続（これで上書きエラーを防ぐ）
         jobstores = {
             'default': SQLAlchemyJobStore(url=f'sqlite:///{self.db_file}')
         }
         self.scheduler.configure(jobstores=jobstores)
-
-        # ジョブに変更があったら同期を依頼する
-        def on_job_change(event):
-            self.request_sync()
-
-        # ジョブの追加、削除、実行完了をすべて監視して、自動でバックアップをとる
-        self.scheduler.add_listener(on_job_change, EVENT_JOB_REMOVED | EVENT_JOB_EXECUTED | EVENT_JOB_ADDED | EVENT_JOB_MODIFIED)
-
-        # ボット起動時にスケジューラーを開始
         self.scheduler.start()
 
-        # 名前空間を cogs. に固定して PicklingError を防ぐ
-        for ext in ['alarm_cog', 'pomodoro_cog']:
-            try:
-                await self.load_extension(f'cogs.{ext}')
-                logger.info(f"Loaded extension: cogs.{ext}")
-            except Exception as e:
-                logger.error(f"Failed to load extension cogs.{ext}: {e}")
+        # 各種機能の読み込み
+        for ext in ['voice_cog', 'alarm_cog', 'pomodoro_cog', 'utility_cog']:
+            await self.load_extension(f'cogs.{ext}')
 
-        # スラッシュコマンドをDiscord側に同期
         await self.tree.sync()
-        logger.info("Bot components initialized.")
+        logger.info("アラームちゃん 準備完了")
 
-    def request_sync(self):
-        """同期（バックアップ）を依頼する。連続した依頼は5秒待ってから1回にまとめる。"""
-        if not self.loop or not self.loop.is_running():
-            return
-
-        async def delayed_sync():
-            await asyncio.sleep(5)
-            await self.upload_data_to_channel()
-
-        # すでに待機中の同期タスクがあればキャンセルして新しく作り直す
-        if self._sync_wait_task and not self._sync_wait_task.done():
-            self._sync_wait_task.cancel()
-        
-        self._sync_wait_task = self.loop.create_task(delayed_sync())
-
-    def load_history(self):
-        """履歴をJSONファイルから読み込む"""
-        if os.path.exists(self.history_file):
-            with open(self.history_file, 'r', encoding='utf-8') as f:
-                try:
-                    return json.load(f)
-                except json.JSONDecodeError: # ファイルが空や不正な形式の場合
-                    return []
-        return []
+    @property
+    def storage(self):
+        return self.get_cog('StorageCog')
 
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         """コマンド実行中にエラーが発生した際の共通処理"""
@@ -119,321 +76,15 @@ class AlarmBot(commands.Bot):
         if not interaction.response.is_done():
             await interaction.response.send_message(msg, ephemeral=True, silent=True)
 
-    async def ensure_storage_channel(self):
-        """ストレージ用チャンネルを確認・作成し、ボットのオーナーに権限を付与する"""
-        guild = None
-        if GUILD_ID and GUILD_ID.isdigit():
-            try:
-                guild = self.get_guild(int(GUILD_ID)) or await self.fetch_guild(int(GUILD_ID))
-            except:
-                pass
-        
-        if not guild:
-            # GUILD_IDが未設定の場合、ボットが参加している最初のサーバーを自動的に使用する
-            async for g in self.fetch_guilds(limit=1):
-                guild = await self.fetch_guild(g.id)
-                break
-        
-        if not guild:
-            logger.warning("No guild found. Cannot create storage channel.")
-            return
-
-        channel_name = "storage"
-        
-        # 1. すでに設定済みのIDがあれば、そのチャンネルが実在するか確認する
-        if STORAGE_CHANNEL_ID and STORAGE_CHANNEL_ID.isdigit():
-            try:
-                channel = self.get_channel(int(STORAGE_CHANNEL_ID)) or await self.fetch_channel(int(STORAGE_CHANNEL_ID))
-                if channel:
-                    self.storage_channel = channel
-                    return
-            except:
-                pass
-
-        # 2. 名前で探す（キャッシュだけでなく、APIから最新のリストを取得して重複作成を防ぐ）
-        all_channels = await guild.fetch_channels()
-        channel = discord.utils.get(all_channels, name=channel_name)
-
-        if not channel:
-            # ボットのオーナーとサーバーのオーナーを取得
-            app_info = await self.application_info()
-            owner = app_info.owner
-            guild_owner = guild.owner or await guild.fetch_member(guild.owner_id)
-
-            # 権限設定: 全員不可視、ボットはフル権限、オーナー陣は閲覧専用
-            read_only_overwrite = discord.PermissionOverwrite(
-                view_channel=True, 
-                read_messages=True, 
-                read_message_history=True,
-                send_messages=False,   # 送信禁止
-                manage_messages=False  # ボットのバックアップ保護（削除禁止）
-            )
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                self.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, manage_messages=True),
-                owner: read_only_overwrite,
-                guild_owner: read_only_overwrite
-            }
-            storage_topic = f"{owner.name}'s Private Data Storage"
-            channel = await guild.create_text_channel(channel_name, overwrites=overwrites, topic=storage_topic)
-            logger.info(f"Created private storage channel: {channel_name} for {owner.name}")
-        
-        self.storage_channel = channel
-
-    async def grant_storage_access(self, member: discord.Member):
-        """指定したユーザーにストレージチャンネルの閲覧権限を付与する"""
-        if not self.storage_channel or not isinstance(member, discord.Member):
-            return
-        
-        try:
-            # 現在の権限を確認し、閲覧権限がなければ付与する
-            overwrites = self.storage_channel.overwrites_for(member)
-            if not overwrites.view_channel:
-                await self.storage_channel.set_permissions(
-                    member, 
-                    view_channel=True, 
-                    read_messages=True, 
-                    read_message_history=True,
-                    send_messages=False,   # 送信を禁止
-                    manage_messages=False  # 削除を禁止
-                )
-                logger.info(f"Granted storage access to user: {member.name}")
-        except Exception as e:
-            logger.error(f"Failed to grant storage access to {member.name}: {e}")
-
-    async def upload_data_to_channel(self):
-        """jobs.sqlite と history.json を指定のチャンネルにアップロードして保存する"""
-        if not self.storage_channel:
-            logger.warning("Storage channel not available. Skipping upload.")
-            return
-        try:
-            # アップロード直前に現在の履歴をディスクに強制保存（同期漏れ防止）
-            with open(self.history_file, 'w', encoding='utf-8') as f:
-                json.dump(self.history, f, ensure_ascii=False, indent=4)
-
-            files = []
-            if os.path.exists(self.db_file):
-                files.append(discord.File(self.db_file))
-            if os.path.exists(self.history_file):
-                files.append(discord.File(self.history_file))
-            
-            if files:
-                # ストレージの中身を「何が行われたか（履歴）」を主役にして表示
-                embed = discord.Embed(title="💾 Storage Update", color=discord.Color.dark_grey())
-                
-                # 直近の完了履歴を最大5件表示
-                recent_history = self.history[-5:]
-                if recent_history:
-                    activity_log = ""
-                    for h in reversed(recent_history):
-                        icon = "🍅" if h.get("category") == "pomodoro" else "⏰"
-                        time_info = h.get("time", "不明")
-                        activity_log += f"{icon} `{time_info}`\n"
-                    embed.add_field(name="直近の活動記録", value=activity_log, inline=False)
-                else:
-                    embed.description = "まだ記録（履歴）はありません。"
-
-                # 予約状況は詳細として小さく表示
-                job_count = len([j for j in self.scheduler.get_jobs() if not j.id.startswith(('pre_', 'snooze_'))])
-                embed.add_field(name="待機中の予約", value=f"`{job_count}` 件", inline=True)
-                embed.set_footer(text=f"Sync: {datetime.now(JST).strftime('%m/%d %H:%M:%S')}")
-
-                new_msg = await self.storage_channel.send(embed=embed, files=files, silent=True) # 通知を飛ばさずアップロード
-                logger.info(f"Data synced to storage channel (Jobs: {len(self.scheduler.get_jobs())})")
-                
-                async def cleanup():
-                    try:
-                        # 同期後の掃除: 最新5件（5世代分）だけ残して、古いバックアップメッセージを削除
-                        count = 0
-                        async for m in self.storage_channel.history(limit=50):
-                            if m.author == self.user:
-                                count += 1
-                                if count > 5:
-                                    await m.delete()
-                    except Exception as e:
-                        logger.warning(f"Storage cleanup had a minor issue: {e}")
-                
-                # 掃除はバックグラウンドで実行
-                self.loop.create_task(cleanup()) 
-        except Exception as e:
-            logger.error(f"Failed to upload data: {e}")
-
-    async def download_data_from_channel(self):
-        """指定のチャンネルから最新のバックアップをダウンロードする"""
-        if not self.storage_channel:
-            logger.warning("Storage channel not available. Skipping download.")
-            return
-        try:
-            found_db = False
-            found_history = False
-            
-            async for message in self.storage_channel.history(limit=100):
-                if message.author == self.user and message.attachments:
-                    for attachment in message.attachments:
-                        if attachment.filename == "jobs.sqlite" and not found_db:
-                            await attachment.save(self.db_file)
-                            found_db = True
-                            logger.info("Downloaded jobs.sqlite")
-                        elif attachment.filename == "history.json" and not found_history:
-                            await attachment.save(self.history_file)
-                            found_history = True
-                            logger.info("Downloaded history.json")
-                    
-                if found_db and found_history:
-                    break
-            
-            # ダウンロード完了後にメモリに展開
-            if found_history:
-                self.history = self.load_history()
-                logger.info(f"History synchronized: {len(self.history)} entries loaded.")
-
-        except Exception as e:
-            logger.error(f"Failed to download data: {e}")
-
-    def save_history(self):
-        """履歴をJSONファイルに保存する"""
-        # 7日以上前の古い履歴を自動的に削除して整理する
-        now = datetime.now(JST)
-        threshold = now - timedelta(days=7)
-
-        new_history = []
-        for entry in self.history:
-            try:
-                set_at = datetime.fromisoformat(entry.get("set_at"))
-                # タイムゾーン情報がない古いデータとの互換性を確保
-                if set_at.tzinfo is None:
-                    set_at = set_at.replace(tzinfo=JST)
-                if set_at > threshold:
-                    new_history.append(entry)
-            except:
-                continue
-        self.history = new_history
-
-        # 件数ベースの制限（1000件）も、ファイルサイズ保護の予備として維持
-        if len(self.history) > 1000:
-            self.history = self.history[-1000:]
-        try:
-            with open(self.history_file, 'w', encoding='utf-8') as f:
-                json.dump(self.history, f, ensure_ascii=False, indent=4)
-            # 履歴の変更もまとめ役に依頼
-            self.request_sync()
-        except Exception as e:
-            logger.error(f"Error in save_history: {e}")
-
     async def close(self):
-        """シャットダウン前にデータをアップロードする"""
         logger.info("Bot is shutting down. Finalizing state...")
-        if self._sync_wait_task and not self._sync_wait_task.done():
-            self._sync_wait_task.cancel() # 待機中の5秒タイマーをキャンセル
-        
-        await self.upload_data_to_channel() # 待たずに即座に最終保存
+        if self.storage:
+            await self.storage.upload_data_to_channel()
         self.scheduler.shutdown()
         await super().close()
 
-    async def on_guild_channel_delete(self, channel):
-        """ストレージチャンネルが削除された場合、即座に再作成してデータを保護する"""
-        if self.storage_channel and channel.id == self.storage_channel.id:
-            logger.warning(f"CRITICAL: Storage channel '{channel.name}' was deleted! Recreating...")
-            
-            # 1. チャンネルを再作成
-            await self.ensure_storage_channel()
-            
-            # 2. 現在メモリにある最新のデータを即座にアップロード
-            if self.storage_channel:
-                await self.upload_data_to_channel()
-                
-                # 3. サーバーオーナーに警告を飛ばす
-                guild_owner = self.storage_channel.guild.owner
-                try:
-                    await guild_owner.send(f"⚠️ 警告: ストレージチャンネルが削除されましたが、ボットが自動で再作成し、データを保護しました。", silent=True)
-                except:
-                    pass
-
-    async def on_message(self, message):
-        """メッセージ受信時のイベント処理"""
-        # storage チャンネル内でのボット以外の発言を削除
-        if self.storage_channel and message.channel.id == self.storage_channel.id:
-            if message.author != self.user and message.type == discord.MessageType.default:
-                try:
-                    await message.delete()
-                    return # ストレージ保護のため、コマンド処理を含めここで中断
-                except discord.Forbidden:
-                    logger.warning("Could not delete message in storage channel: Missing permissions.")
-                except Exception as e:
-                    logger.error(f"Error in on_message delete: {e}")
-        
-        await self.process_commands(message)
-
-    async def on_guild_join(self, guild):
-        """ボットがサーバーに参加した際に、簡単な使い方メッセージを送る"""
-        logger.info(f"Joined new guild: {guild.name} (ID: {guild.id})")
-        
-        # システムチャンネルを探し、権限がなければ送れるテキストチャンネルを検索
-        target_channel = guild.system_channel
-        if not target_channel or not target_channel.permissions_for(guild.me).send_messages:
-            for channel in guild.text_channels:
-                if channel.permissions_for(guild.me).send_messages:
-                    target_channel = channel
-                    break
-        
-        if target_channel:
-            embed = discord.Embed(
-                title="アラームちゃん",
-                description="VCに参加した状態で以下のコマンドを使用してください。",
-                color=discord.Color.blue()
-            )
-            embed.add_field(name="コマンド一覧", value=(
-                "**/alarm** : 指定時刻に音を鳴らします（繰り返しの有無や曜日の指定が可能）\n"
-                "**/pomodoro** : 集中と休憩のサイクルを開始します（25分作業/5分休憩など）\n"
-                "**/alarms** : 現在予約されている通知予定を一覧表示します\n"
-                "**/cancel** : 予約リストから選択してアラームを取り消します\n"
-                "**/history** : 直近1週間の実行履歴を表示します\n"
-                "**/now** : ボットが認識している正確な現在時刻を確認します"
-            ), inline=False)
-
-            try:
-                await target_channel.send(embed=embed)
-            except:
-                pass
-
     async def on_ready(self):
-        # 起動時に「過去の遺物」を掃除する
-        cleaned_count = 0
-        now = datetime.now(JST) # UTCではなくJSTで統一
-        for job in self.scheduler.get_jobs():
-            try:
-                # cronトリガー（繰り返し）は掃除の対象外
-                if hasattr(job.trigger, 'fields'):
-                    continue
-                # 次の実行予定がない、または過去である「一度きり」のジョブを削除
-                if job.next_run_time is None or job.next_run_time < now:
-                    self.scheduler.remove_job(job.id)
-                    cleaned_count += 1
-            except:
-                continue
-
-        if cleaned_count > 0:
-            logger.info(f"Cleaned up {cleaned_count} stale jobs from database.")
-            # 掃除した結果をストレージに同期
-            await self.upload_data_to_channel()
-
-        logger.info(f"Logged in as {self.user.name} (ID: {self.user.id})")
-        
-        # daveyの存在チェック
-        try:
-            import davey
-            logger.info("Voice library 'davey' is correctly installed.")
-        except ImportError:
-            logger.error("CRITICAL: 'davey' library not found. Voice playback will fail!")
-
-        # 音声フォルダーの作成
-        if not os.path.exists(AUDIO_DIR):
-            os.makedirs(AUDIO_DIR)
-            logger.info(f"Created directory: {AUDIO_DIR}")
-
-        # ffmpegの存在確認
-        if not shutil.which("ffmpeg"):
-            logger.error("FFmpeg was not found in the system PATH. Audio playback will fail.")
+        logger.info(f"Logged in as {self.user.name}")
 
 bot = AlarmBot()
 if __name__ == "__main__":

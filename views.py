@@ -50,8 +50,8 @@ class AlarmView(discord.ui.View):
         run_time = datetime.now(JST) + timedelta(minutes=5)
         new_time_str = run_time.strftime('%H:%M')
         new_snooze_id = f"snooze_{self.user_id}_{run_time.strftime('%H%M')}"
-        # alarm_cog モジュールから直接タスク関数をインポートするか、文字列パスで指定
-        from cogs.alarm_cog import task_execute_alarm
+        # 実行エンジンである voice_cog からタスクをインポート
+        from cogs.voice_cog import task_execute_alarm
         
         # ボットのスケジューラーにタスクを追加
         self.bot.scheduler.add_job(
@@ -137,7 +137,7 @@ class PomodoroView(discord.ui.View):
         mode = "work" if is_next_work else "rest"
         job_id = f"pomo_{mode}_{interaction.user.id}_{end_time.strftime('%H%M%S')}"
         
-        from cogs.pomodoro_cog import task_execute_pomodoro
+        from cogs.voice_cog import task_execute_pomodoro
         self.bot.scheduler.add_job(
             task_execute_pomodoro, 'date', run_date=end_time,
             args=[self.guild_id, self.text_channel_id, self.user_id, job_id, self.volume, self.work_mins, self.rest_mins, is_next_work, self.cycle_count, self.memo],
