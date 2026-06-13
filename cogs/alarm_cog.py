@@ -7,8 +7,9 @@ from datetime import datetime, timedelta, timezone # timezoneも必要
 import discord
 from discord.ext import commands
 from discord import app_commands
+from apscheduler.jobstores.base import JobLookupError
 
-from utils import JST, AUDIO_DIR, parse_days_to_cron, alarm_id_autocomplete, day_of_week_autocomplete
+from utils import JST, AUDIO_DIR, parse_days_to_cron, alarm_id_autocomplete, day_of_week_autocomplete, time_autocomplete
 from views import AlarmView
 
 # main.pyからJSTをインポートしているので、ここで再定義は不要
@@ -36,36 +37,32 @@ class AlarmCog(commands.Cog):
         self.bot = bot
         self.active_alarm_playbacks = {} # {job_id: {'vc': VoiceClient, 'stop_event': asyncio.Event, 'audio_source': str, 'volume': float}}
 
-    async def pre_notify(self, text_channel_id: int, job_id: str, time_str: str):
+    async def pre_notify(self, text_channel_id: int, job_id: str, time_str: str, memo: str = None):
         """アラームの5分前に通知するタスク"""
         text_channel = self.bot.get_channel(text_channel_id) or await self.bot.fetch_channel(text_channel_id)
         if text_channel:
+            title = f"⏳ もうすぐ「{memo}」の時間です" if memo else "⏳ もうすぐ時間です"
             embed = discord.Embed(
-                title="⏳ もうすぐ時間です",
+                title=title,
                 description=f"**{time_str}** にアラームが鳴ります。（あと5分）\nID: `{job_id}`",
                 color=discord.Color.blue()
             )
             await text_channel.send(embed=embed)
 
-    async def execute_alarm(self, guild_id: int, text_channel_id: int, voice_channel_id: int, job_id: str, volume: float, time_str: str):
+    async def execute_alarm(self, guild_id: int, text_channel_id: int, user_id: int, job_id: str, volume: float, time_str: str, memo: str = None):
         """指定された時刻にボイスチャンネルへ参加し、音声を再生して切断するタスク"""
         logger.info(f"⏰ アラームタスク開始: {job_id} ({time_str})")
         guild = self.bot.get_guild(guild_id)
-        if not guild:
-            logger.error(f"Guild ID {guild_id} not found.")
-            return
+        if not guild: return
 
-        voice_channel = self.bot.get_channel(voice_channel_id) or await self.bot.fetch_channel(voice_channel_id)
         text_channel = self.bot.get_channel(text_channel_id) or await self.bot.fetch_channel(text_channel_id)
-
-        if not voice_channel:
-            logger.error(f"Voice Channel ID {voice_channel_id} not found.")
+        
+        # ユーザーを検索して、現在入っているボイスチャンネルを特定する (ユーザー追従機能)
+        member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+        if not member or not member.voice or not member.voice.channel:
+            logger.info(f"Skipping alarm {job_id}: User {user_id} is not in any voice channel.")
             return
-
-        # 接続前に、ボイスチャンネルに人間がいるか確認（誰もいなければ鳴らさない）
-        if not any(not member.bot for member in voice_channel.members):
-            logger.info(f"Skipping alarm {job_id}: No human users in {voice_channel.name}.")
-            return
+        voice_channel = member.voice.channel
 
         # 権限の確認
         permissions = voice_channel.permissions_for(guild.me)
@@ -133,12 +130,13 @@ class AlarmCog(commands.Cog):
             # ポモドーロなどの他機能での呼び出し時は、そちらでメッセージを出すため、アラーム/スヌーズ時のみ表示
             # once_ (一度きり) の場合もボタンを表示するように修正
             if text_channel and (job_id.startswith("alarm_") or job_id.startswith("snooze_") or job_id.startswith("once_")):
+                title = f"🔔 {time_str}「{memo}」" if memo else f"🔔 {time_str} です！"
                 embed = discord.Embed(
-                    title=f"🔔 {time_str} です！",
+                    title=title,
                     description=f"予定の時間になりました。通話の区切りなどに活用してください。\n\n停止するかスヌーズを選択してください。",
                     color=discord.Color.gold()
                 )
-                view = AlarmView(self.bot, guild_id, voice_channel_id, text_channel_id, volume, time_str, job_id)
+                view = AlarmView(self.bot, guild_id, user_id, text_channel_id, volume, time_str, job_id, memo)
                 await text_channel.send(embed=embed, view=view)
 
         except Exception as e:
@@ -165,12 +163,13 @@ class AlarmCog(commands.Cog):
     @app_commands.command(name="alarm", description="アラームをセットします")
     @app_commands.describe(
         time_str="時刻を入力してください (例: 07:30)",
+        memo="アラームの内容（例: 会議、ゲームなど）",
         repeat="繰り返しにするかどうかを選択してください",
         day_of_week="鳴らしたい曜日を入力してください (例: 月水金)",
         volume="音量を指定してください (0.1〜1.0)"
     )
-    @app_commands.autocomplete(day_of_week=day_of_week_autocomplete)
-    async def set_alarm(self, interaction: discord.Interaction, time_str: str, repeat: bool = True, day_of_week: str = "毎日", volume: float = 0.5):
+    @app_commands.autocomplete(day_of_week=day_of_week_autocomplete, time_str=time_autocomplete)
+    async def set_alarm(self, interaction: discord.Interaction, time_str: str, memo: str = None, repeat: bool = True, day_of_week: str = "毎日", volume: float = 0.5):
         if not interaction.user.voice:
             return await interaction.response.send_message("❌ ボイスチャンネルに入った状態で実行してください。", ephemeral=True)
 
@@ -180,31 +179,31 @@ class AlarmCog(commands.Cog):
         try:
             now = datetime.now(JST)
             time_obj = datetime.strptime(time_str, "%H:%M")
+            time_id = time_obj.strftime('%H%M')
             cron_days = parse_days_to_cron(day_of_week)
             
-            # 同時刻・同ユーザーの既存ジョブを徹底的に掃除
-            for existing_job in self.bot.scheduler.get_jobs():
-                if str(interaction.user.id) in existing_job.id and time_obj.strftime('%H%M') in existing_job.id and not existing_job.id.startswith("snooze_"):
-                    self.bot.scheduler.remove_job(existing_job.id)
-                    pre_id = f"pre_{existing_job.id}"
-                    if self.bot.scheduler.get_job(pre_id):
-                        self.bot.scheduler.remove_job(pre_id)
+            # 既存の同時刻のアラームを掃除 (安定したIDで狙い撃ち)
+            for prefix in ['alarm', 'once']:
+                try: self.bot.scheduler.remove_job(f"{prefix}_{interaction.user.id}_{time_id}")
+                except: pass
+                try: self.bot.scheduler.remove_job(f"pre_{prefix}_{interaction.user.id}_{time_id}")
+                except: pass
 
             target_time = now.replace(hour=time_obj.hour, minute=time_obj.minute, second=0, microsecond=0)
 
             if repeat:
                 # 繰り返し設定 (cron)
-                job_id = f"alarm_{interaction.user.id}_{cron_days}_{target_time.strftime('%H%M%S')}"
+                job_id = f"alarm_{interaction.user.id}_{time_id}"
                 self.bot.scheduler.add_job(
                     task_execute_alarm, 'cron', day_of_week=cron_days, hour=target_time.hour, minute=target_time.minute,
-                    args=[interaction.guild.id, interaction.channel.id, interaction.user.voice.channel.id, job_id, volume, time_str],
+                    args=[interaction.guild.id, interaction.channel.id, interaction.user.id, job_id, volume, time_str, memo],
                     id=job_id
                 )
                 # 5分前通知の登録
                 pre_time = target_time - timedelta(minutes=5)
                 self.bot.scheduler.add_job(
                     task_pre_notify, 'cron', day_of_week=cron_days, hour=pre_time.hour, minute=pre_time.minute,
-                    args=[interaction.channel.id, job_id, time_str],
+                    args=[interaction.channel.id, job_id, time_str, memo],
                     id=f"pre_{job_id}"
                 )
                 description = f"指定した曜日（{day_of_week}）に繰り返します"
@@ -218,10 +217,10 @@ class AlarmCog(commands.Cog):
                 while target_time.weekday() not in target_weekdays:
                     target_time += timedelta(days=1)
                 
-                job_id = f"once_{interaction.user.id}_{target_time.strftime('%m%d%H%M%S')}"
+                job_id = f"once_{interaction.user.id}_{time_id}"
                 self.bot.scheduler.add_job(
                     task_execute_alarm, 'date', run_date=target_time,
-                    args=[interaction.guild.id, interaction.channel.id, interaction.user.voice.channel.id, job_id, volume, time_str],
+                    args=[interaction.guild.id, interaction.channel.id, interaction.user.id, job_id, volume, time_str, memo],
                     id=job_id
                 )
                 # 5分前通知
@@ -229,30 +228,37 @@ class AlarmCog(commands.Cog):
                 if pre_time > now:
                     self.bot.scheduler.add_job(
                         task_pre_notify, 'date', run_date=pre_time,
-                        args=[interaction.channel.id, job_id, time_str],
+                        args=[interaction.channel.id, job_id, time_str, memo],
                         id=f"pre_{job_id}"
                     )
                 description = f"{target_time.strftime('%m/%d')} に一度のみ実行します"
 
             embed = discord.Embed(title="✅ アラーム予約完了", description=description, color=discord.Color.green())
             embed.add_field(name="⏰ 設定時刻", value=f"`{target_time.strftime('%H:%M')}`", inline=True)
-            embed.add_field(name="🔁 繰り返し", value="はい" if repeat else "いいえ", inline=True)
+            embed.add_field(name="🔁 繰り返し", value=f"はい ({day_of_week})" if repeat else "いいえ", inline=True)
             embed.add_field(name="🔊 音量", value=f"`{volume}`", inline=True)
+            if memo:
+                embed.add_field(name="📝 メモ", value=f"`{memo}`", inline=False)
             embed.add_field(name="🆔 ジョブID", value=f"`{job_id}`", inline=False)
+
+            # 残り時間を計算して表示
+            diff = target_time - now
+            hours, remainder = divmod(int(diff.total_seconds()), 3600)
+            minutes, _ = divmod(remainder, 60)
+            embed.set_footer(text=f"次の実行まで: あと {hours}時間 {minutes}分")
 
             # 履歴をJSONとして保存
             self.bot.history.append({
                 "user_id": interaction.user.id,
-                "time": time_str,
+                "time": f"{time_str} ({memo})" if memo else time_str,
                 "days": day_of_week if repeat else "一度きり",
                 "set_at": now.isoformat(),
                 "category": "alarm"
             })
             self.bot.save_history()
-            # ストレージへの同期を確実に完了させる
-            await self.bot.upload_data_to_channel()
 
-            await interaction.response.send_message(embed=embed)
+            # 設定完了メッセージを本人にのみ表示（プライバシー保護）
+            await interaction.response.send_message(embed=embed, ephemeral=True)
         except ValueError:
             await interaction.response.send_message("⚠️ 時刻は `HH:mm` 形式で指定してください。", ephemeral=True)
 
@@ -260,19 +266,37 @@ class AlarmCog(commands.Cog):
     async def list_alarms(self, interaction: discord.Interaction):
         jobs = self.bot.scheduler.get_jobs()
         user_id_str = str(interaction.user.id)
-        user_jobs = [j for j in jobs if user_id_str in j.id and not j.id.startswith("snooze_")] # スヌーズは除外
+        # ユーザー本人の予約を表示（通知用の pre_ 以外を表示）
+        user_jobs = [j for j in jobs if user_id_str in j.id and not j.id.startswith('pre_')]
 
         if not user_jobs:
             return await interaction.response.send_message("現在予約されているアラームはありません。", ephemeral=True) # 修正なし、元々ephemeral
 
         embed = discord.Embed(title="⏰ 現在のアラーム一覧", color=discord.Color.blue(), timestamp=datetime.now(JST))
         for i, job in enumerate(user_jobs, 1):
-            mode = "一度きり" if job.id.startswith("once_") else "繰り返し"
-            time_str = job.next_run_time.astimezone(JST).strftime('%H:%M')
-            date_str = job.next_run_time.astimezone(JST).strftime('%m/%d')
+            # 種別の判定
+            if job.id.startswith("once_"): mode = "一度きり"
+            elif job.id.startswith("snooze_"): mode = "💤 スヌーズ"
+            elif job.id.startswith("pomo_"): mode = "🍅 ポモドーロ"
+            else: mode = "🔁 繰り返し"
+
+            next_run = job.next_run_time.astimezone(JST)
+            time_str = next_run.strftime('%H:%M')
+            date_str = next_run.strftime('%m/%d')
+            
+            # ジョブに設定されている音量を取得
+            vol = job.args[4] if len(job.args) > 4 else "???"
+            memo = job.args[6] if len(job.args) > 6 else None
+
+            # 残り時間の簡易表示
+            diff = next_run - datetime.now(JST)
+            h, r = divmod(int(diff.total_seconds()), 3600)
+            m, _ = divmod(r, 60)
+            time_info = f"{time_str} ({date_str}) | あと{h}h{m}m"
+
             embed.add_field(
-                name=f"{i}. {time_str} ({mode} | {date_str})",
-                value=f"ID: `{job.id}`",
+                name=f"{i}. {time_info} | 🔊 {vol}",
+                value=f"📝 {memo}\nID: `{job.id}`" if memo else f"ID: `{job.id}`",
                 inline=False
             )
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -282,20 +306,22 @@ class AlarmCog(commands.Cog):
         if str(interaction.user.id) not in job_id:
             return await interaction.response.send_message("❌ 自分のアラームIDのみキャンセルできます。", ephemeral=True) # 修正なし、元々ephemeral
 
-        if self.bot.scheduler.get_job(job_id):
+        try:
             self.bot.scheduler.remove_job(job_id)
-            pre_job_id = f"pre_{job_id}"
-            if self.bot.scheduler.get_job(pre_job_id):
-                self.bot.scheduler.remove_job(pre_job_id)
-
+            try:
+                self.bot.scheduler.remove_job(f"pre_{job_id}")
+            except JobLookupError:
+                pass
+            
             await interaction.response.send_message(f"🗑️ アラーム `{job_id}` をキャンセルしました。", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"⚠️ 指定された ID `{job_id}` が見つかりませんでした。", ephemeral=True) # 修正なし、元々ephemeral
+        except JobLookupError:
+            await interaction.response.send_message(f"⚠️ 指定されたアラームが見つかりませんでした。", ephemeral=True)
 
     @app_commands.command(name="history", description="過去にセットしたアラームの履歴（最新10件）を表示します")
     @app_commands.describe(query="検索したい時間や曜日を入力してください (任意)")
     async def alarm_history(self, interaction: discord.Interaction, query: str = None):
-        user_history = [h for h in self.bot.history if h["user_id"] == interaction.user.id]
+        # 数値でも文字列でも比較できるように ID を文字列化して判定
+        user_history = [h for h in self.bot.history if str(h.get("user_id")) == str(interaction.user.id)]
         
         if query: # クエリがある場合はフィルタリング
             query_lower = query.lower()

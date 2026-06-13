@@ -9,7 +9,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.events import EVENT_JOB_REMOVED, EVENT_JOB_EXECUTED, EVENT_JOB_ADDED
+from apscheduler.events import EVENT_JOB_REMOVED, EVENT_JOB_EXECUTED, EVENT_JOB_ADDED, EVENT_JOB_MODIFIED
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from dotenv import load_dotenv
 
@@ -36,14 +36,11 @@ class AlarmBot(commands.Bot):
         
         # 実行ファイルのディレクトリを取得してパスを動的に設定
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        # スケジューラーの設定（SQLiteにジョブを保存するように変更）
-        jobstores = {
-            'default': SQLAlchemyJobStore(url=f'sqlite:///{os.path.join(base_dir, "jobs.sqlite")}')
-        }
-        # タイムゾーンをJSTに指定して、時間のズレを防止
-        self.scheduler = AsyncIOScheduler(jobstores=jobstores, timezone=JST)
+        # スケジューラーは後で初期化するため、ここではインスタンスのみ作成
+        self.scheduler = AsyncIOScheduler(timezone=JST)
         self.history_file = os.path.join(base_dir, "history.json") # history.jsonのパス
         self.db_file = os.path.join(base_dir, "jobs.sqlite") # データベースのパス
+        self.base_dir = base_dir
         self.history = self.load_history() # 履歴を読み込む
         self.storage_channel = None
         self._sync_wait_task = None # 同期待機用のタスク保持
@@ -52,23 +49,21 @@ class AlarmBot(commands.Bot):
         # ストレージチャンネルの確保
         await self.ensure_storage_channel()
 
-        # 最新データのダウンロード
+        # 【重要】DB接続前に、まず最新データをDiscordからダウンロードする
         await self.download_data_from_channel()
 
-        # スケジューラーの変更を検知して自動で同期するリスナー
+        # ダウンロード完了後にDBストアを接続（これで上書きエラーを防ぐ）
+        jobstores = {
+            'default': SQLAlchemyJobStore(url=f'sqlite:///{self.db_file}')
+        }
+        self.scheduler.configure(jobstores=jobstores)
+
+        # ジョブに変更があったら同期を依頼する
         def on_job_change(event):
-            if self.loop and self.loop.is_running():
-                async def delayed_sync():
-                    await asyncio.sleep(5) # 5秒待って、その間の他の変更もまとめる
-                    await self.upload_data_to_channel()
-                
-                # すでに待機中の同期タスクがあればキャンセルして新しく作り直す（デバウンス処理）
-                if self._sync_wait_task and not self._sync_wait_task.done():
-                    self._sync_wait_task.cancel()
-                self._sync_wait_task = self.loop.create_task(delayed_sync())
+            self.request_sync()
 
         # ジョブの追加、削除、実行完了をすべて監視して、自動でバックアップをとる
-        self.scheduler.add_listener(on_job_change, EVENT_JOB_REMOVED | EVENT_JOB_EXECUTED | EVENT_JOB_ADDED)
+        self.scheduler.add_listener(on_job_change, EVENT_JOB_REMOVED | EVENT_JOB_EXECUTED | EVENT_JOB_ADDED | EVENT_JOB_MODIFIED)
 
         # ボット起動時にスケジューラーを開始
         self.scheduler.start()
@@ -83,8 +78,22 @@ class AlarmBot(commands.Bot):
 
         # スラッシュコマンドをDiscord側に同期
         await self.tree.sync()
-        logger.info("Scheduler started.")
-        logger.info("Slash commands synced.")
+        logger.info("Bot components initialized.")
+
+    def request_sync(self):
+        """同期（バックアップ）を依頼する。連続した依頼は5秒待ってから1回にまとめる。"""
+        if not self.loop or not self.loop.is_running():
+            return
+
+        async def delayed_sync():
+            await asyncio.sleep(5)
+            await self.upload_data_to_channel()
+
+        # すでに待機中の同期タスクがあればキャンセルして新しく作り直す
+        if self._sync_wait_task and not self._sync_wait_task.done():
+            self._sync_wait_task.cancel()
+        
+        self._sync_wait_task = self.loop.create_task(delayed_sync())
 
     def load_history(self):
         """履歴をJSONファイルから読み込む"""
@@ -149,17 +158,14 @@ class AlarmBot(commands.Bot):
 
     async def upload_data_to_channel(self):
         """jobs.sqlite と history.json を指定のチャンネルにアップロードして保存する"""
-        target_channel = self.storage_channel
-        storage_id = os.getenv('STORAGE_CHANNEL_ID')
-        if not target_channel and storage_id and storage_id.isdigit():
-            try:
-                target_channel = self.get_channel(int(storage_id)) or await self.fetch_channel(int(storage_id))
-            except:
-                pass
-
-        if not target_channel:
+        if not self.storage_channel:
+            logger.warning("Storage channel not available. Skipping upload.")
             return
         try:
+            # アップロード直前に現在の履歴をディスクに強制保存（同期漏れ防止）
+            with open(self.history_file, 'w', encoding='utf-8') as f:
+                json.dump(self.history, f, ensure_ascii=False, indent=4)
+
             files = []
             if os.path.exists(self.db_file):
                 files.append(discord.File(self.db_file))
@@ -178,12 +184,12 @@ class AlarmBot(commands.Bot):
                     color=discord.Color.dark_grey()
                 )
                 new_msg = await target_channel.send(embed=embed, files=files)
-                logger.info("Data uploaded to storage channel successfully.")
+                logger.info(f"Data synced to storage channel (Jobs: {len(self.scheduler.get_jobs())})")
                 
                 async def cleanup():
                     try:
                         # 最新のメッセージ以外を掃除（ストレージを清潔に保つ）
-                        await target_channel.purge(
+                        await self.storage_channel.purge(
                             limit=20,
                             check=lambda m: m.author == self.user and m.id != new_msg.id,
                             before=new_msg
@@ -198,27 +204,33 @@ class AlarmBot(commands.Bot):
 
     async def download_data_from_channel(self):
         """指定のチャンネルから最新のバックアップをダウンロードする"""
-        target_channel = self.storage_channel
-        storage_id = os.getenv('STORAGE_CHANNEL_ID')
-        if not target_channel and storage_id and storage_id.isdigit():
-            try:
-                target_channel = self.get_channel(int(storage_id)) or await self.fetch_channel(int(storage_id))
-            except:
-                pass
-
-        if not target_channel:
+        if not self.storage_channel:
+            logger.warning("Storage channel not available. Skipping download.")
             return
         try:
-            async for message in target_channel.history(limit=100):
+            found_db = False
+            found_history = False
+            
+            async for message in self.storage_channel.history(limit=100):
                 if message.author == self.user and message.attachments:
                     for attachment in message.attachments:
-                        if attachment.filename in ["jobs.sqlite", "history.json"]:
-                            save_path = self.db_file if attachment.filename == "jobs.sqlite" else self.history_file
-                            await attachment.save(save_path)
-                            logger.info(f"Downloaded {attachment.filename} from Discord.")
-                    # history.jsonをメモリに再読み込み
-                    self.history = self.load_history()
+                        if attachment.filename == "jobs.sqlite" and not found_db:
+                            await attachment.save(self.db_file)
+                            found_db = True
+                            logger.info("Downloaded jobs.sqlite")
+                        elif attachment.filename == "history.json" and not found_history:
+                            await attachment.save(self.history_file)
+                            found_history = True
+                            logger.info("Downloaded history.json")
+                    
+                if found_db and found_history:
                     break
+            
+            # ダウンロード完了後にメモリに展開
+            if found_history:
+                self.history = self.load_history()
+                logger.info(f"History synchronized: {len(self.history)} entries loaded.")
+
         except Exception as e:
             logger.error(f"Failed to download data: {e}")
 
@@ -227,14 +239,19 @@ class AlarmBot(commands.Bot):
         try:
             with open(self.history_file, 'w', encoding='utf-8') as f:
                 json.dump(self.history, f, ensure_ascii=False, indent=4)
-            # 履歴保存時も同期をリクエスト
-            self.loop.create_task(self.upload_data_to_channel())
+            # 履歴の変更もまとめ役に依頼
+            self.request_sync()
         except Exception as e:
             logger.error(f"Error in save_history: {e}")
 
     async def close(self):
         """シャットダウン前にデータをアップロードする"""
-        await self.upload_data_to_channel()
+        logger.info("Bot is shutting down. Finalizing state...")
+        if self._sync_wait_task and not self._sync_wait_task.done():
+            self._sync_wait_task.cancel() # 待機中の5秒タイマーをキャンセル
+        
+        await self.upload_data_to_channel() # 待たずに即座に最終保存
+        self.scheduler.shutdown()
         await super().close()
 
     async def on_message(self, message):
@@ -255,7 +272,7 @@ class AlarmBot(commands.Bot):
     async def on_ready(self):
         # 起動時に「過去の遺物」を掃除する
         cleaned_count = 0
-        now = datetime.now(timezone.utc)
+        now = datetime.now(JST) # UTCではなくJSTで統一
         for job in self.scheduler.get_jobs():
             try:
                 # cronトリガー（繰り返し）は掃除の対象外

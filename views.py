@@ -4,15 +4,16 @@ from utils import JST
 
 class AlarmView(discord.ui.View):
     """アラーム鳴動時に表示されるインタラクティブなボタン"""
-    def __init__(self, bot, guild_id: int, voice_channel_id: int, text_channel_id: int, volume: float, time_str: str, job_id: str):
+    def __init__(self, bot, guild_id: int, user_id: int, text_channel_id: int, volume: float, time_str: str, job_id: str, memo: str = None):
         super().__init__(timeout=300) # 5分間でタイムアウト
         self.bot = bot
         self.guild_id = guild_id
-        self.voice_channel_id = voice_channel_id
+        self.user_id = user_id
         self.text_channel_id = text_channel_id
         self.volume = volume
         self.time_str = time_str
         self.job_id = job_id
+        self.memo = memo
 
     async def disable_buttons(self, interaction: discord.Interaction):
         """ボタンを無効化してメッセージを更新"""
@@ -39,14 +40,14 @@ class AlarmView(discord.ui.View):
         # JSTを指定して現在の時刻を取得
         run_time = datetime.now(JST) + timedelta(minutes=5)
         new_time_str = run_time.strftime('%H:%M')
-        new_snooze_id = f"snooze_{interaction.user.id}_{run_time.strftime('%H%M%S')}"
+        new_snooze_id = f"snooze_{self.user_id}_{run_time.strftime('%H%M')}"
         # alarm_cog モジュールから直接タスク関数をインポートするか、文字列パスで指定
         from cogs.alarm_cog import task_execute_alarm
         
         # ボットのスケジューラーにタスクを追加
         self.bot.scheduler.add_job(
             task_execute_alarm, 'date', run_date=run_time,
-            args=[self.guild_id, self.text_channel_id, self.voice_channel_id, new_snooze_id, self.volume, new_time_str],
+            args=[self.guild_id, self.text_channel_id, self.user_id, new_snooze_id, self.volume, new_time_str, self.memo],
             id=new_snooze_id
         )
         
@@ -63,17 +64,18 @@ class AlarmView(discord.ui.View):
 
 class PomodoroView(discord.ui.View):
     """ポモドーロセッション終了時に次のセッションを確認するボタン"""
-    def __init__(self, bot, guild_id: int, text_channel_id: int, voice_channel_id: int, volume: float, work_mins: int, rest_mins: int, was_work: bool, cycle_count: int):
+    def __init__(self, bot, guild_id: int, user_id: int, text_channel_id: int, volume: float, work_mins: int, rest_mins: int, was_work: bool, cycle_count: int, memo: str = None):
         super().__init__(timeout=600) # 10分間待機
         self.bot = bot
         self.guild_id = guild_id
+        self.user_id = user_id
         self.text_channel_id = text_channel_id
-        self.voice_channel_id = voice_channel_id
         self.volume = volume
         self.work_mins = work_mins
         self.rest_mins = rest_mins
         self.was_work = was_work
         self.cycle_count = cycle_count
+        self.memo = memo
 
     async def disable_buttons(self, interaction: discord.Interaction):
         """ボタンを無効化"""
@@ -100,7 +102,7 @@ class PomodoroView(discord.ui.View):
         from cogs.pomodoro_cog import task_execute_pomodoro
         self.bot.scheduler.add_job(
             task_execute_pomodoro, 'date', run_date=end_time,
-            args=[self.guild_id, self.text_channel_id, self.voice_channel_id, job_id, self.volume, self.work_mins, self.rest_mins, is_next_work, self.cycle_count], # cycle_countを引き継ぐ
+            args=[self.guild_id, self.text_channel_id, self.user_id, job_id, self.volume, self.work_mins, self.rest_mins, is_next_work, self.cycle_count, self.memo],
             id=job_id
         )
 
