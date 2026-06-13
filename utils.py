@@ -49,7 +49,7 @@ async def alarm_id_autocomplete(interaction: discord.Interaction, current: str):
                 else: icon = '🔁'
 
                 # ラベルに日付とアイコン、IDの一部を含めて分かりやすくする
-                label = f"{icon} {time_str} ({date_str}) | ID: {job.id}"
+                label = f"{icon} {time_str} ({date_str}) - {job.id[:8]}..."
                 if current.lower() in label.lower():
                     choices.append(app_commands.Choice(name=label[:100], value=job.id))
 
