@@ -183,7 +183,7 @@ class AlarmBot(commands.Bot):
                     ),
                     color=discord.Color.dark_grey()
                 )
-                new_msg = await target_channel.send(embed=embed, files=files)
+                new_msg = await self.storage_channel.send(embed=embed, files=files)
                 logger.info(f"Data synced to storage channel (Jobs: {len(self.scheduler.get_jobs())})")
                 
                 async def cleanup():
