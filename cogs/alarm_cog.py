@@ -3,7 +3,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from apscheduler.jobstores.base import JobLookupError
-from utils import JST, AUDIO_DIR, parse_days_to_cron, alarm_id_autocomplete, day_of_week_autocomplete, time_autocomplete
+from utils import JST, parse_days_to_cron, alarm_id_autocomplete, day_of_week_autocomplete, time_autocomplete
 from cogs.voice_cog import task_execute_alarm, task_pre_notify
 
 class AlarmCog(commands.Cog):

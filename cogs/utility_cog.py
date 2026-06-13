@@ -13,8 +13,8 @@ class UtilityCog(commands.Cog):
     async def alarm_history(self, interaction: discord.Interaction, query: str = None):
         if self.bot.storage: await self.bot.storage.grant_storage_access(interaction.user)
         
-        history_source = self.bot.storage.history if self.bot.storage else []
-        user_history = [h for h in history_source if str(h.get("user_id")) == str(interaction.user.id)]
+        if not self.bot.storage: return await interaction.response.send_message("ストレージ準備中...", ephemeral=True)
+        user_history = self.bot.storage.get_history(user_id=interaction.user.id)
         
         if query:
             q = query.lower()
@@ -24,7 +24,7 @@ class UtilityCog(commands.Cog):
             return await interaction.response.send_message("過去の履歴は見つかりませんでした。", ephemeral=True)
 
         embed = discord.Embed(title=f"📜 {interaction.user.display_name}さんの履歴", color=discord.Color.light_grey())
-        for h in reversed(user_history[-10:]):
+        for h in reversed(user_history[:10]):
             set_at = datetime.fromisoformat(h['set_at'])
             icon = "🍅" if h.get("category") == "pomodoro" else "⏰"
             embed.add_field(

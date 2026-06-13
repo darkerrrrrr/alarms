@@ -68,8 +68,12 @@ class VoiceCog(commands.Cog):
             vc.play(discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(audio_path), volume=volume), after=play_loop)
 
             if job_id.startswith(('alarm_', 'once_')) and self.bot.storage:
-                self.bot.storage.history.append({"user_id": user_id, "time": f"{time_str} ({memo})" if memo else time_str, "days": repeat_info, "set_at": datetime.now(JST).isoformat(), "category": "alarm"})
-                self.bot.storage.save_history()
+                self.bot.storage.add_history(
+                    user_id=user_id,
+                    time=f"{time_str} ({memo})" if memo else time_str,
+                    days=repeat_info,
+                    category="alarm"
+                )
 
             if any(job_id.startswith(p) for p in ["alarm_", "once_", "snooze_"]):
                 channel = self.bot.get_channel(text_channel_id)
@@ -84,8 +88,12 @@ class VoiceCog(commands.Cog):
         if was_work:
             cycle_count += 1
             if self.bot.storage:
-                self.bot.storage.history.append({"user_id": user_id, "time": f"{memo} {cycle_count}回目完了" if memo else f"{cycle_count}回目完了", "days": "ポモドーロ作業", "set_at": datetime.now(JST).isoformat(), "category": "pomodoro"})
-                self.bot.storage.save_history()
+                self.bot.storage.add_history(
+                    user_id=user_id,
+                    time=f"{memo} {cycle_count}回目完了" if memo else f"{cycle_count}回目完了",
+                    days="ポモドーロ作業",
+                    category="pomodoro"
+                )
 
         channel = self.bot.get_channel(text_channel_id)
         if channel:

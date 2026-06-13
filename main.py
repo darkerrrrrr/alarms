@@ -36,7 +36,6 @@ class AlarmBot(commands.Bot):
         # 実行ファイルのディレクトリを取得してパスを動的に設定
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.scheduler = AsyncIOScheduler(timezone=JST)
-        self.history_file = os.path.join(base_dir, "history.json")
         self.db_file = os.path.join(base_dir, "jobs.sqlite")
         self.base_dir = base_dir
 
