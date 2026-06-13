@@ -141,20 +141,50 @@ class AlarmBot(commands.Bot):
         channel = discord.utils.get(all_channels, name=channel_name)
 
         if not channel:
-            # ボットのオーナーを取得
+            # ボットのオーナーとサーバーのオーナーを取得
             app_info = await self.application_info()
             owner = app_info.owner
+            guild_owner = guild.owner or await guild.fetch_member(guild.owner_id)
 
-            # 権限設定: 全員不可視、ボットとオーナーのみ可視
+            # 権限設定: 全員不可視、ボットはフル権限、オーナー陣は閲覧専用
+            read_only_overwrite = discord.PermissionOverwrite(
+                view_channel=True, 
+                read_messages=True, 
+                read_message_history=True,
+                send_messages=False,   # 送信禁止
+                manage_messages=False  # ボットのバックアップ保護（削除禁止）
+            )
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(view_channel=False),
                 self.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, manage_messages=True),
-                owner: discord.PermissionOverwrite(view_channel=True, read_messages=True, read_message_history=True)
+                owner: read_only_overwrite,
+                guild_owner: read_only_overwrite
             }
             channel = await guild.create_text_channel(channel_name, overwrites=overwrites, topic="Bot Data Storage (Private)")
             logger.info(f"Created private storage channel: {channel_name} for {owner.name}")
         
         self.storage_channel = channel
+
+    async def grant_storage_access(self, member: discord.Member):
+        """指定したユーザーにストレージチャンネルの閲覧権限を付与する"""
+        if not self.storage_channel or not isinstance(member, discord.Member):
+            return
+        
+        try:
+            # 現在の権限を確認し、閲覧権限がなければ付与する
+            overwrites = self.storage_channel.overwrites_for(member)
+            if not overwrites.view_channel:
+                await self.storage_channel.set_permissions(
+                    member, 
+                    view_channel=True, 
+                    read_messages=True, 
+                    read_message_history=True,
+                    send_messages=False,   # 送信を禁止
+                    manage_messages=False  # 削除を禁止
+                )
+                logger.info(f"Granted storage access to user: {member.name}")
+        except Exception as e:
+            logger.error(f"Failed to grant storage access to {member.name}: {e}")
 
     async def upload_data_to_channel(self):
         """jobs.sqlite と history.json を指定のチャンネルにアップロードして保存する"""
@@ -173,16 +203,26 @@ class AlarmBot(commands.Bot):
                 files.append(discord.File(self.history_file))
             
             if files:
-                # シンプルでシステム的な表示
-                embed = discord.Embed(
-                    description=(
-                        f"💾 **System State Synced**\n"
-                        f"実効予約数: "
-                        f"`{len([j for j in self.scheduler.get_jobs() if not j.id.startswith(('pre_', 'snooze_'))])}` "
-                        f" | 更新時刻: `{datetime.now(JST).strftime('%H:%M:%S')}`"
-                    ),
-                    color=discord.Color.dark_grey()
-                )
+                # ストレージの中身を「何が行われたか（履歴）」を主役にして表示
+                embed = discord.Embed(title="💾 Storage Update", color=discord.Color.dark_grey())
+                
+                # 直近の完了履歴を最大5件表示
+                recent_history = self.history[-5:]
+                if recent_history:
+                    activity_log = ""
+                    for h in reversed(recent_history):
+                        icon = "🍅" if h.get("category") == "pomodoro" else "⏰"
+                        time_info = h.get("time", "不明")
+                        activity_log += f"{icon} `{time_info}`\n"
+                    embed.add_field(name="直近の活動記録", value=activity_log, inline=False)
+                else:
+                    embed.description = "まだ記録（履歴）はありません。"
+
+                # 予約状況は詳細として小さく表示
+                job_count = len([j for j in self.scheduler.get_jobs() if not j.id.startswith(('pre_', 'snooze_'))])
+                embed.add_field(name="待機中の予約", value=f"`{job_count}` 件", inline=True)
+                embed.set_footer(text=f"Sync: {datetime.now(JST).strftime('%m/%d %H:%M:%S')}")
+
                 new_msg = await self.storage_channel.send(embed=embed, files=files) # ActionsでのF821エラーを確実に修正
                 logger.info(f"Data synced to storage channel (Jobs: {len(self.scheduler.get_jobs())})")
                 
@@ -253,6 +293,25 @@ class AlarmBot(commands.Bot):
         await self.upload_data_to_channel() # 待たずに即座に最終保存
         self.scheduler.shutdown()
         await super().close()
+
+    async def on_guild_channel_delete(self, channel):
+        """ストレージチャンネルが削除された場合、即座に再作成してデータを保護する"""
+        if self.storage_channel and channel.id == self.storage_channel.id:
+            logger.warning(f"CRITICAL: Storage channel '{channel.name}' was deleted! Recreating...")
+            
+            # 1. チャンネルを再作成
+            await self.ensure_storage_channel()
+            
+            # 2. 現在メモリにある最新のデータを即座にアップロード
+            if self.storage_channel:
+                await self.upload_data_to_channel()
+                
+                # 3. サーバーオーナーに警告を飛ばす
+                guild_owner = self.storage_channel.guild.owner
+                try:
+                    await guild_owner.send(f"⚠️ 警告: ストレージチャンネルが削除されましたが、ボットが自動で再作成し、データを保護しました。")
+                except:
+                    pass
 
     async def on_message(self, message):
         """メッセージ受信時のイベント処理"""
