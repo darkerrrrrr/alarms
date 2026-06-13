@@ -243,12 +243,13 @@ class AlarmBot(commands.Bot):
                 
                 async def cleanup():
                     try:
-                        # 同期後の掃除: 最新5件だけ残して、それより古いボットのメッセージを削除
-                        await self.storage_channel.purge(
-                            limit=100,
-                            check=lambda m: m.author == self.user and m.id != new_msg.id,
-                            before=discord.Object(id=new_msg.id - 5) # 5世代前より古いものを削除
-                        )
+                        # 同期後の掃除: 最新5件（5世代分）だけ残して、古いバックアップメッセージを削除
+                        count = 0
+                        async for m in self.storage_channel.history(limit=50):
+                            if m.author == self.user:
+                                count += 1
+                                if count > 5:
+                                    await m.delete()
                     except Exception as e:
                         logger.warning(f"Storage cleanup had a minor issue: {e}")
                 
@@ -291,7 +292,24 @@ class AlarmBot(commands.Bot):
 
     def save_history(self):
         """履歴をJSONファイルに保存する"""
-        # 履歴が1000件を超えたら古いものから削除（ファイル肥大化防止）
+        # 7日以上前の古い履歴を自動的に削除して整理する
+        now = datetime.now(JST)
+        threshold = now - timedelta(days=7)
+
+        new_history = []
+        for entry in self.history:
+            try:
+                set_at = datetime.fromisoformat(entry.get("set_at"))
+                # タイムゾーン情報がない古いデータとの互換性を確保
+                if set_at.tzinfo is None:
+                    set_at = set_at.replace(tzinfo=JST)
+                if set_at > threshold:
+                    new_history.append(entry)
+            except:
+                continue
+        self.history = new_history
+
+        # 件数ベースの制限（1000件）も、ファイルサイズ保護の予備として維持
         if len(self.history) > 1000:
             self.history = self.history[-1000:]
         try:
