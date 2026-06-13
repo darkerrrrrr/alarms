@@ -259,22 +259,11 @@ class AlarmCog(commands.Cog):
             # カテゴリ分けして見やすく整理
             content_text = f"📝 **内容**: `{memo or 'なし'}`\n🔊 **音量**: `{int(volume * 100)}%`"
             embed.add_field(name="📋 アラーム詳細", value=content_text, inline=False)
-            embed.set_footer(text=f"識別用コード: {job_id}")
 
-            # 残り時間を計算して表示
-            diff = target_time - now
-            seconds = int(diff.total_seconds())
-            h, r = divmod(max(0, seconds), 3600)
-            m, _ = divmod(r, 60)
-            
-            if h > 24:
-                remaining = f"あと {diff.days}日以上"
-            elif h > 0:
-                remaining = f"あと {h}時間 {m}分"
-            else:
-                remaining = f"あと {m}分"
-            
-            embed.set_footer(text=f"次の実行まで: {remaining}")
+            # 動的タイムスタンプでカウントダウンを表示
+            timestamp_code = f"<t:{int(target_time.timestamp())}:R>"
+            embed.add_field(name="⏳ 次の実行", value=timestamp_code, inline=True)
+            embed.set_footer(text=f"ID: {job_id}")
 
             # 設定完了メッセージを本人にのみ表示（プライバシー保護）
             await interaction.response.send_message(embed=embed, ephemeral=True)
