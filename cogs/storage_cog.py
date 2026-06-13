@@ -10,6 +10,10 @@ from utils import JST
 
 logger = logging.getLogger(__name__)
 
+# --- 設定定数 ---
+HISTORY_RETENTION_DAYS = 3  # 履歴を保持する日数（3日経ったら自動削除）
+SYNC_DELAY_SECONDS = 60     # 同期の待機時間（秒）。頻繁なアップロードを抑える。
+
 class StorageCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -51,7 +55,7 @@ class StorageCog(commands.Cog):
         """履歴をDBに直接挿入し、古いデータをクリーンアップする"""
         now = datetime.now(JST)
         set_at = now.isoformat()
-        threshold = (now - timedelta(days=7)).isoformat()
+        threshold = (now - timedelta(days=HISTORY_RETENTION_DAYS)).isoformat()
 
         try:
             with sqlite3.connect(self.bot.db_file) as conn:
@@ -69,9 +73,9 @@ class StorageCog(commands.Cog):
         self.request_sync()
 
     def request_sync(self):
-        """同期（バックアップ）を依頼する。連続した依頼は5秒待ってから1回にまとめる。"""
+        """同期（バックアップ）を依頼する。連続した依頼は指定秒数待ってから1回にまとめる。"""
         async def delayed_sync():
-            await asyncio.sleep(5)
+            await asyncio.sleep(SYNC_DELAY_SECONDS)
             await self.upload_data_to_channel()
 
         if self._sync_wait_task and not self._sync_wait_task.done():
