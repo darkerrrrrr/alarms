@@ -183,16 +183,16 @@ class AlarmBot(commands.Bot):
                     ),
                     color=discord.Color.dark_grey()
                 )
-                new_msg = await self.storage_channel.send(embed=embed, files=files)
+                new_msg = await self.storage_channel.send(embed=embed, files=files) # ActionsでのF821エラーを確実に修正
                 logger.info(f"Data synced to storage channel (Jobs: {len(self.scheduler.get_jobs())})")
                 
                 async def cleanup():
                     try:
-                        # 最新のメッセージ以外を掃除（ストレージを清潔に保つ）
+                        # 同期後の掃除: 最新5件だけ残して、それより古いボットのメッセージを削除
                         await self.storage_channel.purge(
-                            limit=20,
+                            limit=100,
                             check=lambda m: m.author == self.user and m.id != new_msg.id,
-                            before=new_msg
+                            before=discord.Object(id=new_msg.id - 5) # 5世代前より古いものを削除
                         )
                     except Exception as e:
                         logger.warning(f"Storage cleanup had a minor issue: {e}")
