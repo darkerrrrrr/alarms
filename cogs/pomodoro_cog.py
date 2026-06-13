@@ -29,7 +29,7 @@ class PomodoroCog(commands.Cog):
         if alarm_cog:
             # 音声を鳴らす（AlarmCogのexecute_alarmロジックを流用）
             display_memo = memo if memo else "ポモドーロ"
-            await alarm_cog.execute_alarm(guild_id, text_channel_id, user_id, job_id, volume, f"{display_memo}終了", display_memo)
+            await alarm_cog.execute_alarm(guild_id, text_channel_id, user_id, job_id, volume, f"{display_memo}終了", display_memo, "ポモドーロ")
 
         now = datetime.now(JST)
         if was_work:
@@ -50,11 +50,15 @@ class PomodoroCog(commands.Cog):
         # 次のフェーズの案内を表示
         status_msg = "作業" if was_work else "休憩"
         next_phase = "休憩" if was_work else "作業"
+        color = discord.Color.green() if not was_work else discord.Color.blue()
 
         # 作業終了時と休憩終了時でViewを表示
-        embed = discord.Embed(title=f"⏰ {status_msg}終了", description=f"{status_msg}セッションが終了しました。次は**{next_phase}**です。\n開始しますか？", color=discord.Color.gold())
+        title = f"✨ {status_msg}セッション完了！"
+        description = f"お疲れ様でした。{cycle_count}回目のセッションが終わりました。\n次は **{next_phase}** です。準備ができたらボタンを押してください。"
+        
+        embed = discord.Embed(title=title, description=description, color=color)
         view = PomodoroView(self.bot, guild_id, user_id, text_channel_id, volume, work_mins, rest_mins, was_work, cycle_count, memo, job_id)
-        await text_channel.send(embed=embed, view=view)
+        await text_channel.send(embed=embed, view=view, silent=True)
 
     @app_commands.command(name="pomodoro", description="作業と休憩のサイクル（ポモドーロ・タイマー）を開始します")
     @app_commands.describe(
@@ -94,7 +98,7 @@ class PomodoroCog(commands.Cog):
 
             embed = discord.Embed(
                 title="🍅 ポモドーロ・タイマー開始",
-                description=f"「**{memo}**」の作業セッションを開始しました。集中しましょう！" if memo else "作業セッションを開始しました。集中しましょう！",
+                description=f"「**{memo}**」に集中する時間です！\n作業と休憩を繰り返して、効率よく進めましょう。" if memo else "ポモドーロ作業を開始しました！\n集中と休憩を繰り返して、効率よく進めましょう。",
                 color=discord.Color.red()
             )
             embed.add_field(name="✍️ 作業時間", value=f"{work_mins}分", inline=True)

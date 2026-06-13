@@ -1,6 +1,9 @@
 import discord
+import logging
 from datetime import datetime, timedelta
 from utils import JST
+
+logger = logging.getLogger(__name__)
 
 class AlarmView(discord.ui.View):
     """アラーム鳴動時に表示されるインタラクティブなボタン"""
@@ -15,6 +18,12 @@ class AlarmView(discord.ui.View):
         self.job_id = job_id
         self.memo = memo
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ この操作は本人のみ可能です。", ephemeral=True, silent=True)
+            return False
+        return True
+
     async def disable_buttons(self, interaction: discord.Interaction, exclude_delete=False):
         """ボタンを無効化してメッセージを更新"""
         for item in self.children:
@@ -28,7 +37,7 @@ class AlarmView(discord.ui.View):
         alarm_cog = self.bot.get_cog('AlarmCog')
         if alarm_cog:
             await alarm_cog.stop_playback(self.job_id)
-        await interaction.response.send_message("✅ アラームを停止しました。", ephemeral=True)
+        await interaction.response.send_message("✅ アラームを停止しました。", ephemeral=True, silent=True)
 
     @discord.ui.button(label="スヌーズ (5分)", style=discord.ButtonStyle.primary)
     async def snooze_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -52,7 +61,7 @@ class AlarmView(discord.ui.View):
         )
         
         # 通知メッセージ
-        await interaction.response.send_message(f"💤 スヌーズ: {new_time_str} に再度通知します。", ephemeral=True)
+        await interaction.response.send_message(f"💤 スヌーズ: {new_time_str} に再度通知します。", ephemeral=True, silent=True)
         self.stop()
 
     @discord.ui.button(label="🗑️", style=discord.ButtonStyle.secondary)
@@ -61,7 +70,10 @@ class AlarmView(discord.ui.View):
         if alarm_cog:
             await alarm_cog.stop_playback(self.job_id)
         
-        await interaction.message.delete()
+        try:
+            await interaction.message.delete()
+        except:
+            pass
         self.stop()
 
     async def on_timeout(self):
@@ -87,6 +99,16 @@ class PomodoroView(discord.ui.View):
         self.memo = memo
         self.job_id = job_id
 
+        # 次のフェーズに合わせてボタンのラベルを分かりやすく変更
+        next_label = "☕ 休憩を始める" if was_work else "✍️ 次の作業へ"
+        self.next_button.label = next_label
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ この操作は本人のみ可能です。", ephemeral=True, silent=True)
+            return False
+        return True
+
     async def disable_buttons(self, interaction: discord.Interaction, exclude_delete=False):
         """ボタンを無効化"""
         for item in self.children:
@@ -99,7 +121,12 @@ class PomodoroView(discord.ui.View):
         await self.disable_buttons(interaction)
         pomo_cog = self.bot.get_cog('PomodoroCog')
         if not pomo_cog:
-            return await interaction.response.send_message("⚠️ エラー: Pomodoro機能が見つかりません。", ephemeral=True)
+            return await interaction.response.send_message("⚠️ エラー: Pomodoro機能が見つかりません。", ephemeral=True, silent=True)
+
+        # 次へ進む前に現在の音を止める
+        alarm_cog = self.bot.get_cog('AlarmCog')
+        if alarm_cog:
+            await alarm_cog.stop_playback(self.job_id)
 
         now = datetime.now(JST)
         is_next_work = not self.was_work
@@ -118,13 +145,18 @@ class PomodoroView(discord.ui.View):
         )
 
         title = "✍️ 作業開始" if is_next_work else "☕ 休憩開始"
-        await interaction.response.send_message(f"✅ {title}しました。終了予定: `{end_time.strftime('%H:%M:%S')}`", ephemeral=True)
+        await interaction.response.send_message(f"✅ {title}しました。終了予定: `{end_time.strftime('%H:%M:%S')}`", ephemeral=True, silent=True)
         self.stop()
 
     @discord.ui.button(label="終了 (Stop)", style=discord.ButtonStyle.secondary)
     async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.disable_buttons(interaction, exclude_delete=True)
-        await interaction.response.send_message("✅ ポモドーロタイマーを終了しました。", ephemeral=True)
+        # 終了時に音を止める
+        alarm_cog = self.bot.get_cog('AlarmCog')
+        if alarm_cog:
+            await alarm_cog.stop_playback(self.job_id)
+            
+        await interaction.response.send_message("✅ ポモドーロタイマーを終了しました。", ephemeral=True, silent=True)
 
     @discord.ui.button(label="🗑️", style=discord.ButtonStyle.secondary)
     async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):

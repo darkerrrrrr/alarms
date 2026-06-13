@@ -52,6 +52,9 @@ class AlarmBot(commands.Bot):
         # 【重要】DB接続前に、まず最新データをDiscordからダウンロードする
         await self.download_data_from_channel()
 
+        # グローバルなコマンドエラーハンドラーを設定
+        self.tree.on_error = self.on_app_command_error
+
         # ダウンロード完了後にDBストアを接続（これで上書きエラーを防ぐ）
         jobstores = {
             'default': SQLAlchemyJobStore(url=f'sqlite:///{self.db_file}')
@@ -104,6 +107,17 @@ class AlarmBot(commands.Bot):
                 except json.JSONDecodeError: # ファイルが空や不正な形式の場合
                     return []
         return []
+
+    async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """コマンド実行中にエラーが発生した際の共通処理"""
+        if isinstance(error, app_commands.CommandOnCooldown):
+            msg = f"⏳ クールタイム中です。{error.retry_after:.1f}秒後に再度試してください。"
+        else:
+            logger.error(f"Unhandled command error: {error}")
+            msg = "⚠️ コマンドの実行中に予期せぬエラーが発生しました。"
+        
+        if not interaction.response.is_done():
+            await interaction.response.send_message(msg, ephemeral=True, silent=True)
 
     async def ensure_storage_channel(self):
         """ストレージ用チャンネルを確認・作成し、ボットのオーナーに権限を付与する"""
@@ -160,7 +174,8 @@ class AlarmBot(commands.Bot):
                 owner: read_only_overwrite,
                 guild_owner: read_only_overwrite
             }
-            channel = await guild.create_text_channel(channel_name, overwrites=overwrites, topic="Bot Data Storage (Private)")
+            storage_topic = f"{owner.name}'s Private Data Storage"
+            channel = await guild.create_text_channel(channel_name, overwrites=overwrites, topic=storage_topic)
             logger.info(f"Created private storage channel: {channel_name} for {owner.name}")
         
         self.storage_channel = channel
@@ -276,6 +291,9 @@ class AlarmBot(commands.Bot):
 
     def save_history(self):
         """履歴をJSONファイルに保存する"""
+        # 履歴が1000件を超えたら古いものから削除（ファイル肥大化防止）
+        if len(self.history) > 1000:
+            self.history = self.history[-1000:]
         try:
             with open(self.history_file, 'w', encoding='utf-8') as f:
                 json.dump(self.history, f, ensure_ascii=False, indent=4)
@@ -309,7 +327,7 @@ class AlarmBot(commands.Bot):
                 # 3. サーバーオーナーに警告を飛ばす
                 guild_owner = self.storage_channel.guild.owner
                 try:
-                    await guild_owner.send(f"⚠️ 警告: ストレージチャンネルが削除されましたが、ボットが自動で再作成し、データを保護しました。")
+                    await guild_owner.send(f"⚠️ 警告: ストレージチャンネルが削除されましたが、ボットが自動で再作成し、データを保護しました。", silent=True)
                 except:
                     pass
 
@@ -317,7 +335,7 @@ class AlarmBot(commands.Bot):
         """メッセージ受信時のイベント処理"""
         # storage チャンネル内でのボット以外の発言を削除
         if self.storage_channel and message.channel.id == self.storage_channel.id:
-            if message.author != self.user:
+            if message.author != self.user and message.type == discord.MessageType.default:
                 try:
                     await message.delete()
                     return # ストレージ保護のため、コマンド処理を含めここで中断

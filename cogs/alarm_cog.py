@@ -47,7 +47,7 @@ class AlarmCog(commands.Cog):
                 description=f"**{time_str}** にアラームが鳴ります。（あと5分）\nID: `{job_id}`",
                 color=discord.Color.blue()
             )
-            await text_channel.send(embed=embed)
+            await text_channel.send(embed=embed, silent=True)
 
     async def execute_alarm(self, guild_id: int, text_channel_id: int, user_id: int, job_id: str, volume: float, time_str: str, memo: str = None, repeat_info: str = "一度きり"):
         """指定された時刻にボイスチャンネルへ参加し、音声を再生して切断するタスク"""
@@ -68,13 +68,20 @@ class AlarmCog(commands.Cog):
         permissions = voice_channel.permissions_for(guild.me)
         if not permissions.connect or not permissions.speak:
             if text_channel:
-                await text_channel.send(f"⚠️ ボイスチャンネル `{voice_channel.name}` に接続、または発言する権限がありません。")
+                await text_channel.send(f"⚠️ ボイスチャンネル `{voice_channel.name}` に接続、または発言する権限がありません。", silent=True)
             return
 
         try:
-            # すでに接続中の場合は一度切断
+            # ボイス接続の最適化
             if guild.voice_client:
-                await guild.voice_client.disconnect()
+                if guild.voice_client.channel.id == voice_channel.id:
+                    vc = guild.voice_client
+                else:
+                    await guild.voice_client.move_to(voice_channel)
+                    vc = guild.voice_client
+            else:
+                vc = await voice_channel.connect()
+                logger.info(f"Connected to {voice_channel.name} for Job: {job_id}")
 
             # 停止イベントを作成し、アクティブな再生リストに追加
             stop_event = asyncio.Event()
@@ -85,16 +92,13 @@ class AlarmCog(commands.Cog):
                 'volume': volume
             }
 
-            # 接続
-            vc = await voice_channel.connect()
-            logger.info(f"Connected to {voice_channel.name} for Job: {job_id}")
             self.active_alarm_playbacks[job_id]['vc'] = vc
 
             # soundsフォルダからランダムにファイルを選択
             files = [f for f in os.listdir(AUDIO_DIR) if f.endswith(('.mp3', '.wav', '.ogg'))]
             if not files:
                 if text_channel:
-                    await text_channel.send(f"⚠️ `{AUDIO_DIR}` フォルダに音声ファイルが見つかりません。")
+                    await text_channel.send(f"⚠️ `{AUDIO_DIR}` フォルダに音声ファイルが見つかりません。", silent=True)
                 await self.stop_playback(job_id) # 音源がないので停止
                 return
             
@@ -149,7 +153,7 @@ class AlarmCog(commands.Cog):
                     color=discord.Color.gold()
                 )
                 view = AlarmView(self.bot, guild_id, user_id, text_channel_id, volume, time_str, job_id, memo)
-                await text_channel.send(embed=embed, view=view)
+                await text_channel.send(embed=embed, view=view, silent=True)
 
         except Exception as e:
             logger.exception(f"Failed to execute alarm: {e}")
@@ -292,7 +296,7 @@ class AlarmCog(commands.Cog):
         # 実行予定が近い順に並び替え
         user_jobs.sort(key=lambda x: x.next_run_time)
 
-        embed = discord.Embed(title="⏰ 現在の予約スケジュール", color=discord.Color.blue())
+        embed = discord.Embed(title=f"⏰ {interaction.user.display_name}さんの予約スケジュール", color=discord.Color.blue())
         embed.set_footer(text=f"合計 {len(user_jobs)} 件 | 現在時刻: {datetime.now(JST).strftime('%H:%M')}")
 
         for i, job in enumerate(user_jobs, 1):
@@ -303,19 +307,8 @@ class AlarmCog(commands.Cog):
             else: icon, mode = "🔁", "毎週"
 
             next_run = job.next_run_time.astimezone(JST)
-            
-            # 残り時間の計算ロジックをリファイン
-            diff = next_run - datetime.now(JST)
-            seconds = int(diff.total_seconds())
-            h, r = divmod(max(0, seconds), 3600)
-            m, _ = divmod(r, 60)
-            
-            if h > 24:
-                remaining = f"あと {diff.days}日以上"
-            elif h > 0:
-                remaining = f"あと {h}時間 {m}分"
-            else:
-                remaining = f"あと {m}分"
+            # Discordの動的タイムスタンプ (UNIX秒)
+            timestamp_code = f"<t:{int(next_run.timestamp())}:R>"
 
             # ジョブ引数から音量とメモを取得
             vol_val = job.args[4] if len(job.args) > 4 else 0.5
@@ -326,7 +319,7 @@ class AlarmCog(commands.Cog):
 
             embed.add_field(
                 name=f"#{i} {icon} {next_run.strftime('%H:%M')} ({mode})",
-                value=f"⏳ **{remaining}**\n└ 📝 `{memo}` | 🔊 `{vol_display}`",
+                value=f"⏳ **実行**: {timestamp_code}\n└ 📝 `{memo}` | 🔊 `{vol_display}` | 🆔 `{job.id}`",
                 inline=False
             )
 
@@ -369,7 +362,7 @@ class AlarmCog(commands.Cog):
         if not user_history:
             return await interaction.response.send_message("過去の設定履歴は見つかりませんでした。", ephemeral=True)
 
-        embed = discord.Embed(title="📜 アラーム設定履歴", color=discord.Color.light_grey(), timestamp=datetime.now(JST))
+        embed = discord.Embed(title=f"📜 {interaction.user.display_name}さんの履歴", color=discord.Color.light_grey(), timestamp=datetime.now(JST))
         # 最新の10件を新しい順で表示
         for h in reversed(user_history[-10:]):
             set_at_dt = datetime.fromisoformat(h['set_at'])
