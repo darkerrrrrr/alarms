@@ -223,7 +223,7 @@ class AlarmBot(commands.Bot):
                 embed.add_field(name="待機中の予約", value=f"`{job_count}` 件", inline=True)
                 embed.set_footer(text=f"Sync: {datetime.now(JST).strftime('%m/%d %H:%M:%S')}")
 
-                new_msg = await self.storage_channel.send(embed=embed, files=files) # ActionsでのF821エラーを確実に修正
+                new_msg = await self.storage_channel.send(embed=embed, files=files, silent=True) # 通知を飛ばさずアップロード
                 logger.info(f"Data synced to storage channel (Jobs: {len(self.scheduler.get_jobs())})")
                 
                 async def cleanup():
