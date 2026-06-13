@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import discord
 from discord.ext import commands
 from discord import app_commands
 from apscheduler.jobstores.base import JobLookupError
