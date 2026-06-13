@@ -364,6 +364,38 @@ class AlarmBot(commands.Bot):
         
         await self.process_commands(message)
 
+    async def on_guild_join(self, guild):
+        """ボットがサーバーに参加した際に、簡単な使い方メッセージを送る"""
+        logger.info(f"Joined new guild: {guild.name} (ID: {guild.id})")
+        
+        # システムチャンネルを探し、権限がなければ送れるテキストチャンネルを検索
+        target_channel = guild.system_channel
+        if not target_channel or not target_channel.permissions_for(guild.me).send_messages:
+            for channel in guild.text_channels:
+                if channel.permissions_for(guild.me).send_messages:
+                    target_channel = channel
+                    break
+        
+        if target_channel:
+            embed = discord.Embed(
+                title="アラームちゃん",
+                description="VCに参加した状態で以下のコマンドを使用してください。",
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="コマンド一覧", value=(
+                "**/alarm** : 指定時刻に音を鳴らします（繰り返しの有無や曜日の指定が可能）\n"
+                "**/pomodoro** : 集中と休憩のサイクルを開始します（25分作業/5分休憩など）\n"
+                "**/alarms** : 現在予約されている通知予定を一覧表示します\n"
+                "**/cancel** : 予約リストから選択してアラームを取り消します\n"
+                "**/history** : 直近1週間の実行履歴を表示します\n"
+                "**/now** : ボットが認識している正確な現在時刻を確認します"
+            ), inline=False)
+
+            try:
+                await target_channel.send(embed=embed)
+            except:
+                pass
+
     async def on_ready(self):
         # 起動時に「過去の遺物」を掃除する
         cleaned_count = 0
