@@ -75,6 +75,12 @@ class AlarmBot(commands.Bot):
         if not interaction.response.is_done():
             await interaction.response.send_message(msg, ephemeral=True, silent=True)
 
+    async def on_command_error(self, context, exception):
+        """メンション等での誤反応（CommandNotFound）を無視する"""
+        if isinstance(exception, commands.CommandNotFound):
+            return
+        logger.error(f"Prefix command error: {exception}")
+
     async def close(self):
         logger.info("Bot is shutting down. Finalizing state...")
         if self.storage:

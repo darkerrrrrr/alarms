@@ -91,9 +91,13 @@ class StorageCog(commands.Cog):
                 break
         if not guild: return
 
-        if storage_channel_id:
-            self.storage_channel = self.bot.get_channel(int(storage_channel_id))
-            if self.storage_channel: return
+        try:
+            if storage_channel_id and str(storage_channel_id).isdigit():
+                cid = int(storage_channel_id)
+                self.storage_channel = self.bot.get_channel(cid) or await self.bot.fetch_channel(cid)
+                if self.storage_channel: return
+        except (discord.NotFound, discord.Forbidden, ValueError):
+            logger.warning("Specified storage channel not found or inaccessible. Searching by name...")
 
         all_channels = await guild.fetch_channels()
         channel = discord.utils.get(all_channels, name="storage")
@@ -151,8 +155,13 @@ class StorageCog(commands.Cog):
 
     async def grant_storage_access(self, member):
         """ユーザーに閲覧権限を付与"""
-        if self.storage_channel and isinstance(member, discord.Member):
+        if not self.storage_channel or not isinstance(member, discord.Member): return
+        try:
             await self.storage_channel.set_permissions(member, view_channel=True, read_messages=True, send_messages=False)
+        except discord.NotFound:
+            self.storage_channel = None # チャンネルが消えていたら参照を消す
+        except Exception as e:
+            logger.error(f"Failed to grant storage access: {e}")
 
     @commands.Cog.listener()
     async def on_guild_channel_delete(self, channel):
