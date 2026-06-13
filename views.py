@@ -15,20 +15,20 @@ class AlarmView(discord.ui.View):
         self.job_id = job_id
         self.memo = memo
 
-    async def disable_buttons(self, interaction: discord.Interaction):
+    async def disable_buttons(self, interaction: discord.Interaction, exclude_delete=False):
         """ボタンを無効化してメッセージを更新"""
         for item in self.children:
-            item.disabled = True
+            if not (exclude_delete and getattr(item, 'label', '') == "🗑️"):
+                item.disabled = True
         await interaction.message.edit(view=self)
 
     @discord.ui.button(label="停止 (Stop)", style=discord.ButtonStyle.danger)
     async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.disable_buttons(interaction)
+        await self.disable_buttons(interaction, exclude_delete=True)
         alarm_cog = self.bot.get_cog('AlarmCog')
         if alarm_cog:
             await alarm_cog.stop_playback(self.job_id)
         await interaction.response.send_message("✅ アラームを停止しました。", ephemeral=True)
-        self.stop()
 
     @discord.ui.button(label="スヌーズ (5分)", style=discord.ButtonStyle.primary)
     async def snooze_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -54,7 +54,16 @@ class AlarmView(discord.ui.View):
         # 通知メッセージ
         await interaction.response.send_message(f"💤 スヌーズ: {new_time_str} に再度通知します。", ephemeral=True)
         self.stop()
-    
+
+    @discord.ui.button(label="🗑️", style=discord.ButtonStyle.secondary)
+    async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        alarm_cog = self.bot.get_cog('AlarmCog')
+        if alarm_cog:
+            await alarm_cog.stop_playback(self.job_id)
+        
+        await interaction.message.delete()
+        self.stop()
+
     async def on_timeout(self):
         """Viewがタイムアウトした場合、ボットを切断する"""
         alarm_cog = self.bot.get_cog('AlarmCog')
@@ -77,10 +86,11 @@ class PomodoroView(discord.ui.View):
         self.cycle_count = cycle_count
         self.memo = memo
 
-    async def disable_buttons(self, interaction: discord.Interaction):
+    async def disable_buttons(self, interaction: discord.Interaction, exclude_delete=False):
         """ボタンを無効化"""
         for item in self.children:
-            item.disabled = True
+            if not (exclude_delete and getattr(item, 'label', '') == "🗑️"):
+                item.disabled = True
         await interaction.message.edit(view=self)
 
     @discord.ui.button(label="次を開始 (Next)", style=discord.ButtonStyle.success)
@@ -112,6 +122,18 @@ class PomodoroView(discord.ui.View):
 
     @discord.ui.button(label="終了 (Stop)", style=discord.ButtonStyle.secondary)
     async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.disable_buttons(interaction)
+        await self.disable_buttons(interaction, exclude_delete=True)
         await interaction.response.send_message("✅ ポモドーロタイマーを終了しました。", ephemeral=True)
+
+    @discord.ui.button(label="🗑️", style=discord.ButtonStyle.secondary)
+    async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 再生停止が必要な場合は止める
+        alarm_cog = self.bot.get_cog('AlarmCog')
+        if alarm_cog:
+            await alarm_cog.stop_playback(self.job_id)
+
+        try:
+            await interaction.message.delete()
+        except:
+            pass
         self.stop()
